@@ -333,6 +333,9 @@ function fc_capi_apply_market(int $id, array $data, string $ts): void
         if ($commodity === '') {
             continue;
         }
+        if (!fc_is_traded((int) ($item['stock'] ?? 0), (int) ($item['demand'] ?? 0))) {
+            continue;
+        }
         $stmt->execute([
             'cid' => $id,
             'c' => mb_substr($commodity, 0, 64),

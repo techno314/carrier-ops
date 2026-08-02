@@ -1046,6 +1046,9 @@ function fc_ev_market(array $carrier, array $event, ?string $ts): bool
         if (strcasecmp($category, 'NonMarketable') === 0) {
             continue;
         }
+        if (!fc_is_traded((int) ($item['Stock'] ?? 0), (int) ($item['Demand'] ?? 0))) {
+            continue;
+        }
         $stmt->execute([
             'cid' => $id,
             'c' => mb_substr($commodity, 0, 64),
@@ -1161,6 +1164,20 @@ function fc_module_label(string $symbol): string
  * them capitalised, so the prefix test has to ignore case or every module from
  * one of the two sources lands in "Other".
  */
+/**
+ * Whether a market row is actually being traded.
+ *
+ * A carrier's commodity list keeps every commodity it has ever been set up
+ * for, whether or not anything is standing against it. Those leftovers come
+ * back with no stock and no demand but still carry a price, so rendering them
+ * shows a carrier offering to sell bauxite it does not have, at a price
+ * nobody can pay. Stock or demand is what makes a listing real.
+ */
+function fc_is_traded(int $stock, int $demand): bool
+{
+    return $stock > 0 || $demand > 0;
+}
+
 /**
  * Whether an outfitting entry is real stock.
  *
