@@ -1,0 +1,2 @@
+# Written at runtime by the migration runner; per-deployment, not source.
+.schema-version
