@@ -225,9 +225,31 @@ case 'orders':
     );
     ?>
     <div class="card">
-      <h2>Standing orders</h2>
+      <h2>Standing orders
+        <?php if ($carrier['orders_at'] !== null): ?>
+          <span class="muted small">confirmed <?= fc_e(fc_ago($carrier['orders_at'])) ?></span>
+        <?php endif; ?>
+      </h2>
+
+      <?php if ($rows !== [] && $carrier['orders_at'] === null): ?>
+        <div class="banner warn">
+          These come from <code>CarrierTradeOrder</code> events in the journal, which record an order being
+          <em>placed</em> or <em>cancelled</em> — never filled. So orders that quietly completed are still listed here.
+          <?php if ($owns): ?>
+            The <a href="<?= fc_e(fc_url('plugin.php')) ?>">EDMC plugin</a> replaces this with the live order book
+            the next time it reads the Companion API.
+          <?php endif; ?>
+        </div>
+      <?php endif; ?>
+
       <?php if ($rows === []): ?>
-        <div class="empty">No buy or sell orders recorded. These come from <code>CarrierTradeOrder</code> events in the journal.</div>
+        <div class="empty">
+          <?php if ($carrier['orders_at'] !== null): ?>
+            No buy or sell orders standing.
+          <?php else: ?>
+            No buy or sell orders recorded.
+          <?php endif; ?>
+        </div>
       <?php else: ?>
         <div class="tablewrap">
           <table>

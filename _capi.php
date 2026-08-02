@@ -133,6 +133,7 @@ function fc_ingest_capi(array $data, array $user, ?string $ts = null): array
     fc_capi_apply_services($carrierId, $data, $ts);
     fc_capi_apply_cargo($carrierId, $data, $ts);
     fc_capi_apply_market($carrierId, $data, $ts);
+    fc_capi_apply_orders($carrierId, $data, $ts);
     fc_capi_apply_shipyard($carrierId, $data, $ts);
     fc_capi_apply_outfitting($carrierId, $data, $ts);
     fc_capi_apply_itinerary($carrierId, $data);
@@ -346,6 +347,87 @@ function fc_capi_apply_market(int $id, array $data, string $ts): void
     }
 
     fc_update_carrier($id, ['market_at' => $ts, 'market_id' => $id]);
+}
+
+/**
+ * The live buy and sell order book.
+ *
+ * This is the only authority on which orders are still standing. The journal
+ * emits CarrierTradeOrder when an order is placed and again when it is
+ * cancelled, but nothing at all when one is simply filled — so an order table
+ * built from the journal alone only ever grows, and ends up listing trades
+ * that completed months ago.
+ *
+ * Frontier is inconsistent about the container: purchases come back as a list,
+ * sales as an object keyed by commodity id. Both are handled, and an
+ * unrecognised shape is logged rather than silently dropped.
+ */
+function fc_capi_apply_orders(int $id, array $data, string $ts): void
+{
+    // No `orders` key means this payload says nothing about orders. Only an
+    // explicitly present (and possibly empty) book is allowed to clear rows.
+    if (!isset($data['orders']) || !is_array($data['orders'])) {
+        return;
+    }
+    $commodities = $data['orders']['commodities'] ?? null;
+    if (!is_array($commodities)) {
+        return;
+    }
+
+    fc_exec('DELETE FROM fc_orders WHERE carrier_id = :id', ['id' => $id]);
+
+    $stmt = fc_db()->prepare(
+        'INSERT INTO fc_orders (carrier_id, commodity, black_market, loc_name, kind, amount, price, updated_at)
+         VALUES (:cid, :c, :bm, :loc, :kind, :amount, :price, :ts)
+         ON DUPLICATE KEY UPDATE amount = VALUES(amount), price = VALUES(price),
+                                 updated_at = VALUES(updated_at)'
+    );
+
+    foreach (['purchases' => 'buy', 'sales' => 'sell'] as $section => $kind) {
+        $entries = $commodities[$section] ?? [];
+        if (!is_array($entries)) {
+            error_log("fc: unexpected shape for orders.commodities.{$section}: " . gettype($entries));
+            continue;
+        }
+
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $commodity = fc_clean_symbol($entry['name'] ?? null);
+            if ($commodity === '') {
+                continue;
+            }
+            $amount = fc_first_number($entry, ['purchaseOrder', 'stock', 'total', 'quantity', 'amount']);
+            $price = fc_first_number($entry, ['price', 'unitPrice']);
+            if ($amount === null || $amount <= 0) {
+                continue;
+            }
+            $stmt->execute([
+                'cid' => $id,
+                'c' => mb_substr($commodity, 0, 64),
+                'bm' => (int) (bool) ($entry['blackmarket'] ?? $entry['blackMarket'] ?? false),
+                'loc' => $entry['locName'] ?? null,
+                'kind' => $kind,
+                'amount' => $amount,
+                'price' => $price ?? 0,
+                'ts' => $ts,
+            ]);
+        }
+    }
+
+    fc_update_carrier($id, ['orders_at' => $ts]);
+}
+
+/** First of these keys holding a number, or null. */
+function fc_first_number(array $source, array $keys): ?int
+{
+    foreach ($keys as $key) {
+        if (isset($source[$key]) && is_numeric($source[$key])) {
+            return (int) $source[$key];
+        }
+    }
+    return null;
 }
 
 function fc_capi_apply_shipyard(int $id, array $data, string $ts): void

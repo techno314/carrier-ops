@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 2;
+const FC_SCHEMA_VERSION = 3;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -92,6 +92,10 @@ function fc_ensure_columns(): void
             'total_distance_jumped' => 'DOUBLE NULL',
             'capi_at' => 'DATETIME NULL',
             'cargo_at' => 'DATETIME NULL',
+            // When the order book was last confirmed against the game. Until
+            // it has been, the orders table is only what the journal saw
+            // created and never saw filled.
+            'orders_at' => 'DATETIME NULL',
         ],
     ];
 
