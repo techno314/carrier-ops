@@ -156,39 +156,6 @@ PHP 8 with `pdo_mysql`, behind nginx. No build step, no Composer, no dependencie
 Tables are created and migrated on first request. A `.schema-version` sentinel next to the code keeps
 the check to one `stat()` per request rather than a database round trip; delete it to force a re-run.
 
-### Becoming an admin
-
-Admins can see and take over any carrier, so the role is granted by proving you have access to the
-deployment rather than by being first to the registration form. Put a secret in `.htadmin-code` in
-the app root and enter it on the settings page.
-
-The `.ht` prefix is load-bearing: nginx here denies any path containing `/\.ht`, so the file cannot be
-fetched over HTTP. A plain `.admin-code` would be served as a static file. Delete it to close
-promotion entirely.
-
-### Email
-
-Password reset needs a working relay. The defaults are the settings the host's Nextcloud instance
-already uses, so on this deployment it works without configuration; the names map one to one:
-
-| Nextcloud | Here |
-| --- | --- |
-| `mail_smtphost` | `FC_SMTP_HOST` |
-| `mail_smtpport` | `FC_SMTP_PORT` |
-| `mail_smtpsecure` | `FC_SMTP_SECURE` — `tls` (STARTTLS), `ssl` or `none` |
-| `mail_smtpname` | `FC_SMTP_USER` |
-| `mail_smtppassword` | `FC_SMTP_PASSWORD`, or `.htsmtp-password` in the app root |
-| `mail_from_address` + `mail_domain` | `FC_MAIL_FROM` |
-
-[`lib/mail.php`](lib/mail.php) speaks SMTP directly rather than calling `mail()`: this container has
-no real sendmail, and anything it did emit would be filed as spam. The password sits behind the same
-`.ht` naming as the admin code, since nginx refuses to serve those and there is no writable
-environment here.
-
-A reset link lasts an hour, works once, and using it ends every signed-in session for that account.
-Requests are capped at three an hour per account, and the form answers the same way whether or not
-the address is registered — otherwise it would be a way to find out who has an account.
-
 ## API
 
 Authenticate with an `X-API-Key` header (generate one on the settings page), or use the site session.
