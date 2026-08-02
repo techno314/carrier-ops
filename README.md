@@ -210,6 +210,18 @@ braces, since a PHP misconfiguration would otherwise serve source. `lib/core.php
 for the handful of paths that belong to the deployment rather than the library: `.htadmin-code`,
 `.schema-version` and `assets/`.
 
-## Notes
+## Credits and licences
 
-Not affiliated with Frontier Developments. Elite Dangerous is a trademark of Frontier Developments plc.
+See [NOTICE.md](NOTICE.md) in full. In short:
+
+- **[FCMS](https://github.com/FuelRats/FCMS)** (BSD-3-Clause, The Fuel Rats) was the reference for how
+  Frontier's `/fleetcarrier` response is shaped and which entities a carrier board needs. No FCMS code
+  is here — that is Python on Pyramid, this is PHP with no framework. The Fuel Rats have not endorsed
+  this and are not associated with it.
+- **[Ardent Insight](https://ardent-insight.com/)** provides the market data behind "Sell where?",
+  over a public keyless API. No Ardent code is included.
+- **[EDMarketConnector](https://github.com/EDCD/EDMarketConnector)** loads the plugin in
+  `edmc-plugin/` through its documented entry points, and is what fetches Companion API data under
+  its own Frontier registration.
+
+Not affiliated with Frontier Developments. Elite Dangerous is copyright Frontier Developments plc.

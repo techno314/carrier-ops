@@ -330,6 +330,18 @@ function fc_apply_event(array $event, array $user, array &$report): bool
     if ($isSnapshot) {
         $carrier = fc_carrier($carrierId);
         if ($carrier === null || !fc_owns($user, $carrier)) {
+            // Silently dropping this is how somebody ends up uploading the
+            // same file repeatedly wondering why nothing happens. These files
+            // are overwritten by whichever market was opened last, so the one
+            // sitting on disk is very often a starport's.
+            $station = $event['StationName'] ?? null;
+            $note = $name . '.json is from '
+                . ($station === null ? 'another station' : $station)
+                . ', not one of your carriers. The game overwrites that file every time you open a '
+                . strtolower($name) . ' screen, so open your own carrier\'s and upload it again.';
+            if (!in_array($note, $report['notes'], true)) {
+                $report['notes'][] = $note;
+            }
             return false;
         }
     } else {

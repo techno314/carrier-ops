@@ -79,14 +79,16 @@ fc_head('Upload', 'upload');
   <?php if ($result !== null): ?>
     <div class="banner">
       Read <?= (int) $result['files'] ?> file<?= $result['files'] === 1 ? '' : 's' ?>,
-      found <?= fc_num($result['seen']) ?> events and applied <?= fc_num($result['applied']) ?>.
+      found <?= fc_num($result['seen']) ?> event<?= $result['seen'] === 1 ? '' : 's' ?>
+      and applied <?= fc_num($result['applied']) ?>.
       <?php if ($result['carriers'] !== []): ?>
         <div style="margin-top:8px">
           <?php foreach ($result['carriers'] as $cid => $label): ?>
             <a class="btn ghost sm" href="<?= fc_e(fc_url('carrier.php?id=' . (int) $cid)) ?>"><?= fc_e($label) ?></a>
           <?php endforeach; ?>
         </div>
-      <?php else: ?>
+      <?php elseif ($result['notes'] === []): ?>
+        <?php // Only guess at the reason when nothing more specific was found. ?>
         <div style="margin-top:6px" class="small">
           No carrier events in those files. The most useful one is a session where you opened the Carrier
           Management screen — that writes <code>CarrierStats</code>, which carries everything at once.
