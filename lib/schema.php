@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 6;
+const FC_SCHEMA_VERSION = 7;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -60,6 +60,7 @@ function fc_migrate(): void
     }
     fc_ensure_columns();
     fc_drop_columns();
+    fc_backfill();
 
     // Record it in the database too, so a wiped sentinel does not hide which
     // version the live tables are actually at.
@@ -80,6 +81,10 @@ function fc_migrate(): void
 function fc_ensure_columns(): void
 {
     $wanted = [
+        'fc_users' => [
+            // Null means the address has been claimed but not proved.
+            'email_verified_at' => 'DATETIME NULL',
+        ],
         'fc_carriers' => [
             // From the Companion API, which reports what the game actually
             // charges rather than what _costs.php reconstructs.
@@ -121,6 +126,36 @@ function fc_ensure_columns(): void
             }
             $db->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
         }
+    }
+}
+
+/**
+ * One-off data fixes that a CREATE or an ALTER cannot express.
+ *
+ * Each is guarded by its own key in fc_meta rather than by the schema version,
+ * because fc_migrate re-runs every statement whenever the sentinel is missing
+ * and these must happen exactly once. Grandfathering, in particular, would
+ * otherwise mark every unverified account verified on the next migration.
+ */
+function fc_backfill(): void
+{
+    $done = static fn(string $key): bool =>
+        fc_one('SELECT v FROM fc_meta WHERE k = :k', ['k' => $key]) !== null;
+
+    $mark = static fn(string $key) => fc_exec(
+        "INSERT INTO fc_meta (k, v) VALUES (:k, '1') ON DUPLICATE KEY UPDATE v = v",
+        ['k' => $key],
+    );
+
+    // Accounts that existed before verification did are trusted as they are.
+    // The alternative is to lock people out of a board they already use over a
+    // check that did not exist when they signed up.
+    if (!$done('email_grandfathered')) {
+        fc_exec(
+            'UPDATE fc_users SET email_verified_at = created_at
+              WHERE email IS NOT NULL AND email_verified_at IS NULL',
+        );
+        $mark('email_grandfathered');
     }
 }
 
@@ -369,6 +404,22 @@ function fc_schema_statements(): array
             payload MEDIUMTEXT NULL,
             fetched_at DATETIME NOT NULL,
             KEY fc_buyers_fetched (fetched_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // The address being proved is stored on the token rather than read off
+        // the account, so a link cannot be made to verify an address other than
+        // the one it was sent to -- and so following it is what commits an
+        // email change, rather than the change being trusted up front.
+        "CREATE TABLE IF NOT EXISTS fc_email_tokens (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            user_id INT UNSIGNED NOT NULL,
+            email VARCHAR(190) NOT NULL,
+            token_hash CHAR(64) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            used_at DATETIME NULL,
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY fc_email_tokens_token (token_hash),
+            KEY fc_email_tokens_user (user_id, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // Reset tokens are stored hashed, like session tokens: the mail is the

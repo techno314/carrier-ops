@@ -23,6 +23,7 @@ define('FC_ROOT', dirname(__DIR__));
 
 require_once __DIR__ . '/costs.php';
 require_once __DIR__ . '/schema.php';
+require_once __DIR__ . '/mail.php';
 
 const FC_SESSION_COOKIE = 'fc_session';
 const FC_SESSION_TTL = 2592000;   // 30 days
@@ -584,6 +585,39 @@ function fc_head(string $title, string $active = ''): void
   </div>
 </header>
 <?php
+    // Shown on every page rather than only where it bites, so the reason
+    // uploading is refused is already on screen before it is tried.
+    if ($user !== null && !fc_email_verified($user)) {
+        ?>
+<div class="verifybar">
+  Confirm your email address to upload journals and claim a carrier.
+  <?php if (($user['email'] ?? null) !== null): ?>
+    We sent a link to <strong><?= fc_e($user['email']) ?></strong>.
+  <?php endif; ?>
+  <a href="<?= fc_e(fc_url('account.php?do=resend')) ?>">Send it again</a>
+</div>
+<?php
+    }
+}
+
+/**
+ * Refuse an action until the account's address has been proved.
+ *
+ * Uploading is the line, not signing in. Someone locked out of the whole board
+ * by a mail that never arrived cannot reach the page that resends it, whereas
+ * this leaves every read-only part of the site working.
+ */
+function fc_require_verified(array $user): void
+{
+    if (fc_email_verified($user)) {
+        return;
+    }
+    if (fc_wants_json()) {
+        fc_fail(403, 'Confirm your email address before uploading. '
+            . 'Open the link we sent you, or request another from the settings page.');
+    }
+    fc_flash('Confirm your email address before uploading — we sent a link when you registered.', 'err');
+    fc_redirect(fc_url('settings.php'));
 }
 
 function fc_foot(): void

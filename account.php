@@ -28,6 +28,8 @@ match ($do) {
     'register' => fc_page_register(),
     'forgot' => fc_page_forgot(),
     'reset' => fc_page_reset(),
+    'verify' => fc_page_verify(),
+    'resend' => fc_page_resend(),
     default => fc_page_login(),
 };
 
@@ -161,6 +163,11 @@ function fc_page_register(): void
             $error = 'That invite code is not valid.';
         } elseif (!preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $username)) {
             $error = 'Usernames are 3–32 characters, letters, numbers, dot, dash or underscore.';
+        } elseif ($email === '' && fc_mail_enabled()) {
+            // Required now that it is checked. An account with no address
+            // cannot recover a password and cannot be told anything, which is
+            // a worse position than it looks from the registration form.
+            $error = 'Enter an email address — you will need to confirm it.';
         } elseif ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $error = 'That does not look like an email address.';
         } elseif (mb_strlen($password) < 10) {
@@ -175,6 +182,10 @@ function fc_page_register(): void
             // Everyone registers as an ordinary user. Admin is granted by the
             // code on the settings page — handing the role to whoever signs up
             // first would give a passer-by every carrier on the board.
+            // The address is recorded but not yet trusted; email_verified_at
+            // stays null until the link in the mail is followed. Where mail is
+            // not configured there is nothing to follow, so the account is
+            // usable as it always was.
             fc_exec(
                 'INSERT INTO fc_users (username, email, password_hash, cmdr_name, is_admin, created_at)
                  VALUES (:u, :e, :p, :c, 0, UTC_TIMESTAMP())',
@@ -192,6 +203,16 @@ function fc_page_register(): void
 
             fc_prune();
             fc_start_session($newId);
+
+            if ($email !== '' && fc_mail_enabled()) {
+                $ok = fc_send_verification($newId, $username, $email);
+                fc_flash($ok
+                    ? 'Account created. Open the link we sent to ' . $email . ' to confirm the address.'
+                    : 'Account created, but the confirmation mail could not be sent. Ask for another below.',
+                    $ok ? 'ok' : 'err');
+                fc_redirect(fc_url('settings.php'));
+            }
+
             fc_flash('Account created. Upload a journal to bring your carrier in.');
             fc_redirect(fc_url('upload.php'));
         }
@@ -229,8 +250,15 @@ function fc_page_register(): void
           </div>
 
           <div class="field">
-            <label for="email">Email <span class="dim">(optional, but needed to reset a forgotten password)</span></label>
-            <input id="email" name="email" type="email" value="<?= fc_e($email) ?>" autocomplete="email">
+            <label for="email">Email
+              <span class="dim">
+                <?= fc_mail_enabled()
+                    ? '(we will send a link to confirm it)'
+                    : '(optional, but needed to reset a forgotten password)' ?>
+              </span>
+            </label>
+            <input id="email" name="email" type="email" value="<?= fc_e($email) ?>"
+                   <?= fc_mail_enabled() ? 'required' : '' ?> autocomplete="email">
           </div>
 
           <div class="field">
@@ -252,6 +280,85 @@ function fc_page_register(): void
     </main>
     <?php
     fc_foot();
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Follow a confirmation link.
+ *
+ * Deliberately usable while signed out: the link is often opened on a phone,
+ * in whatever browser the mail app happens to hand it to, where there is no
+ * session at all. The token is the proof, not the session.
+ */
+function fc_page_verify(): void
+{
+    $user = fc_consume_verification((string) ($_REQUEST['token'] ?? ''));
+
+    fc_head('Confirm your email');
+    ?>
+    <main class="wrap narrow">
+      <div class="card">
+        <?php if ($user !== null): ?>
+          <h1>Address confirmed</h1>
+          <div class="banner">
+            <strong><?= fc_e($user['email']) ?></strong> is now confirmed for
+            <strong><?= fc_e($user['username']) ?></strong>.
+          </div>
+          <p class="muted small">Uploading and claiming a carrier are open to you now.</p>
+          <div class="actions">
+            <?php if (fc_user() === null): ?>
+              <a class="btn" href="<?= fc_e(fc_account_url('login')) ?>">Sign in</a>
+            <?php else: ?>
+              <a class="btn" href="<?= fc_e(fc_url('upload.php')) ?>">Upload a journal</a>
+            <?php endif; ?>
+          </div>
+        <?php else: ?>
+          <h1>That link did not work</h1>
+          <div class="banner err">
+            It may have expired, already been used, or been replaced by a newer one. Addresses already
+            registered to a different account cannot be confirmed either.
+          </div>
+          <div class="actions">
+            <?php if (fc_user() !== null): ?>
+              <a class="btn" href="<?= fc_e(fc_account_url('resend')) ?>">Send a new link</a>
+            <?php else: ?>
+              <a class="btn" href="<?= fc_e(fc_account_url('login')) ?>">Sign in to send a new one</a>
+            <?php endif; ?>
+          </div>
+        <?php endif; ?>
+      </div>
+    </main>
+    <?php
+    fc_foot();
+}
+
+// ---------------------------------------------------------------------------
+
+function fc_page_resend(): void
+{
+    $user = fc_require_user();
+
+    if (fc_email_verified($user)) {
+        fc_flash('That address is already confirmed.');
+        fc_redirect(fc_url('settings.php'));
+    }
+
+    $email = trim((string) ($user['email'] ?? ''));
+    if ($email === '') {
+        fc_flash('Add an email address first, then we can confirm it.', 'err');
+        fc_redirect(fc_url('settings.php'));
+    }
+
+    // A GET is enough: the only thing this does is send mail to the address
+    // already on the account, and it is rate limited either way.
+    $ok = fc_send_verification((int) $user['id'], (string) $user['username'], $email);
+    fc_flash($ok
+        ? 'A new link is on its way to ' . $email . '.'
+        : 'No link was sent — either mail is not working here, or you have asked '
+            . FC_VERIFY_MAX_PER_HOUR . ' times in the last hour. Try again later.',
+        $ok ? 'ok' : 'err');
+    fc_redirect(fc_url('settings.php'));
 }
 
 // ---------------------------------------------------------------------------

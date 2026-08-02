@@ -185,6 +185,11 @@ case 'ingest':
         fc_json(400, ['error' => 'Nothing to read.']);
     }
 
+    // Checked here rather than at the top of the request so that reading data
+    // back, and the plugin's own connection test, keep working while an
+    // address is still waiting to be confirmed.
+    fc_require_verified($user);
+
     $totals = ['seen' => 0, 'applied' => 0, 'carriers' => [], 'notes' => []];
     foreach ($chunks as [$name, $text]) {
         $report = fc_ingest_text($text, $user, $name, 'api');

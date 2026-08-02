@@ -231,6 +231,19 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .check input { margin-top: 3px; }
 .check label { margin: 0; color: var(--text); font-size: 0.9rem; }
 
+/* Sits directly under the nav on every page while an address is unconfirmed,
+   so the reason an upload will be refused is on screen before it is tried. */
+.verifybar {
+  padding: 10px 24px;
+  font-size: 0.86rem;
+  text-align: center;
+  color: var(--warn);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.verifybar a { color: var(--warn); text-decoration: underline; margin-left: 6px; }
+.verifybar strong { color: var(--text); }
+
 /* Each webhook is its own form, so it needs a visible edge of its own to keep
    one carrier's several Discord channels from reading as one long form. */
 .webhook {
