@@ -102,15 +102,21 @@ function fc_find_buyers(string $commodity, string $system, int $minDemand, int $
 
     // Asking for more demand than anyone has is a common way to get nothing
     // back. Rather than an empty page, drop the demand floor and say so.
-    if ($result['error'] === null && $result['rows'] === [] && $minDemand > 0) {
+    // Skipped while deferred, so a wait is not turned into two waits.
+    if ($result['error'] === null
+        && ($result['retry_after'] ?? 0) === 0
+        && $result['rows'] === []
+        && $minDemand > 0
+    ) {
         $relaxed = fc_ardent_imports($commodity, $system, 0, $maxDistance);
         if ($relaxed['rows'] !== []) {
             $relaxed['relaxed'] = true;
-            return $relaxed;
+            return $relaxed + ['retry_after' => 0];
         }
     }
 
-    return $result;
+    // Every path returns the same shape, so callers need not check for keys.
+    return $result + ['retry_after' => 0];
 }
 
 /**
@@ -135,35 +141,44 @@ function fc_demand_bucket(int $demand): int
 }
 
 /**
- * Whether another live call is allowed right now.
+ * Take a slot for a live call, or report how long until one frees.
  *
  * Caching stops the same question being asked twice, but says nothing about a
- * burst of *different* questions — eleven commodities across three ranges is
- * thirty-three cold lookups from one impatient session. This caps the whole
- * site rather than one visitor, since it is the far end being protected.
+ * burst of *different* questions. This caps the whole site rather than one
+ * visitor, since it is the far end being protected.
+ *
+ * Nothing is refused outright: when the minute is full this returns the exact
+ * number of seconds until the oldest call ages out, and the caller hands that
+ * to the browser to come back with. The waiting happens in someone's tab,
+ * where it costs nothing, rather than in a PHP worker, where it would cost
+ * everyone else on the domain one of only five.
+ *
+ * @return int 0 if a slot was taken, otherwise seconds to wait
  */
-function fc_ardent_may_fetch(): bool
+function fc_ardent_take_slot(): int
 {
     $row = fc_one("SELECT v FROM fc_meta WHERE k = 'ardent_fetches'");
     $stamps = $row === null ? [] : (json_decode((string) $row['v'], true) ?: []);
 
-    $cutoff = time() - 60;
+    $now = time();
     $stamps = array_values(array_filter(
         array_map('intval', is_array($stamps) ? $stamps : []),
-        static fn(int $t) => $t > $cutoff,
+        static fn(int $t) => $t > $now - 60,
     ));
+    sort($stamps);
 
     if (count($stamps) >= FC_BUYERS_RATE_LIMIT) {
-        return false;
+        // The oldest call in the window is what frees the next slot.
+        return max(1, $stamps[0] + 60 - $now);
     }
 
-    $stamps[] = time();
+    $stamps[] = $now;
     fc_exec(
         "INSERT INTO fc_meta (k, v) VALUES ('ardent_fetches', :v)
          ON DUPLICATE KEY UPDATE v = VALUES(v)",
         ['v' => mb_substr(json_encode($stamps), 0, 255)],
     );
-    return true;
+    return 0;
 }
 
 /**
@@ -199,9 +214,9 @@ function fc_ardent_imports(string $commodity, string $system, int $minDemand, in
         }
     }
 
-    if (!fc_ardent_may_fetch()) {
-        // Over the burst limit. Anything stale beats hammering someone else's
-        // server, and beats an error page.
+    $wait = fc_ardent_take_slot();
+    if ($wait > 0) {
+        // Stale data now beats a wait, so serve it if we have any.
         if ($cached !== null && $cached['payload'] !== null) {
             $rows = json_decode((string) $cached['payload'], true);
             return [
@@ -209,13 +224,17 @@ function fc_ardent_imports(string $commodity, string $system, int $minDemand, in
                 'fetched_at' => $cached['fetched_at'],
                 'error' => null,
                 'relaxed' => false,
+                'retry_after' => 0,
             ];
         }
+        // Nothing cached: the question is not dropped, just deferred to the
+        // browser, which will ask again once a slot has actually freed.
         return [
             'rows' => [],
             'fetched_at' => null,
-            'error' => 'Too many market lookups at once. Give it a minute.',
+            'error' => null,
             'relaxed' => false,
+            'retry_after' => $wait,
         ];
     }
 

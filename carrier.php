@@ -209,7 +209,29 @@ case 'cargo':
             <span class="muted small"><?= fc_num($qty) ?> t, within <?= fc_num($range) ?> ly of <?= fc_e($carrier['system']) ?></span>
           </h2>
 
-          <?php if ($buyers['error'] !== null): ?>
+          <?php if ($buyers['retry_after'] > 0): ?>
+            <?php
+            // Deferred, not dropped. The page comes back on its own once a
+            // slot has actually freed — the waiting happens here rather than
+            // in a PHP worker.
+            $wait = (int) $buyers['retry_after'];
+            ?>
+            <div class="banner warn" id="fcWait">
+              Other lookups are in flight. Asking again in <span id="fcWaitSecs"><?= $wait ?></span>s —
+              leave this open, nothing has been lost.
+            </div>
+            <script>
+            (function () {
+              var left = <?= $wait ?>;
+              var el = document.getElementById('fcWaitSecs');
+              setInterval(function () {
+                left -= 1;
+                if (el) { el.textContent = left > 0 ? left : 0; }
+                if (left <= 0) { location.reload(); }
+              }, 1000);
+            })();
+            </script>
+          <?php elseif ($buyers['error'] !== null): ?>
             <div class="banner err"><?= fc_e($buyers['error']) ?></div>
           <?php elseif ($buyers['rows'] === []): ?>
             <div class="empty">Nobody within <?= fc_num($range) ?> ly is buying <?= fc_e($label) ?>.</div>
