@@ -12,6 +12,10 @@ if ($user === null) {
     ?>
     <main class="wrap mid">
       <?php fc_render_flash(); ?>
+      <div class="hero">
+        <img src="/fc/assets/carrier-banner.jpg?v=<?= fc_e(fc_asset_version('carrier-banner.jpg')) ?>"
+             alt="A Drake-Class fleet carrier against the galactic plane" width="1200" height="630">
+      </div>
       <div class="card">
         <h1>Carrier Ops</h1>
         <p class="muted">

@@ -137,6 +137,27 @@ p { line-height: 1.55; }
 .right { text-align: right; }
 .nowrap { white-space: nowrap; }
 
+/* Landing page hero. Faded into the page at the bottom so the photograph
+   does not sit in the layout like a pasted-in rectangle. */
+.hero {
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  margin-bottom: 18px;
+  line-height: 0;
+  position: relative;
+}
+.hero img { width: 100%; height: auto; display: block; }
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 45%;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 85%, transparent));
+  pointer-events: none;
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--border);

@@ -551,7 +551,21 @@ function fc_head(string $title, string $active = ''): void
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
 <title><?= fc_e($title) ?> · Carrier Ops</title>
+<?php
+/*
+ * Two marks, because one cannot do both jobs. The photograph is a real
+ * Drake-Class and looks like one at 128px and up, which is what a link
+ * preview or an apple-touch-icon gets. It turns to mush by 32px, so the
+ * favicon stays vector.
+ */
+?>
 <link rel="icon" type="image/svg+xml" href="<?= fc_e(fc_favicon()) ?>">
+<link rel="apple-touch-icon" href="/fc/assets/carrier-512.jpg?v=<?= fc_e(fc_asset_version('carrier-512.jpg')) ?>">
+<meta property="og:title" content="<?= fc_e($title) ?> · Carrier Ops">
+<meta property="og:description" content="Fleet carrier management for Elite Dangerous, read from your own game journals.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="<?= fc_e(fc_base_url()) ?>/fc/assets/carrier-banner.jpg?v=<?= fc_e(fc_asset_version('carrier-banner.jpg')) ?>">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="/fc/assets/style.css?v=<?= fc_e(fc_asset_version()) ?>">
 </head>
 <body>
@@ -590,11 +604,15 @@ function fc_foot(): void
 <?php
 }
 
-/** Cache-bust the stylesheet on content change without a build step. */
-function fc_asset_version(): string
+/**
+ * Cache-bust an asset on content change without a build step.
+ *
+ * Cloudflare caches by URL and will happily keep serving a replaced file
+ * forever otherwise — it did exactly that with the plugin zip.
+ */
+function fc_asset_version(string $file = 'style.css'): string
 {
-    $path = __DIR__ . '/assets/style.css';
-    $mtime = @filemtime($path);
+    $mtime = @filemtime(__DIR__ . '/assets/' . $file);
     return $mtime === false ? '0' : (string) $mtime;
 }
 
