@@ -280,10 +280,13 @@ function fc_capi_apply_cargo(int $id, array $data, string $ts): void
     }
 
     fc_exec('DELETE FROM fc_cargo WHERE carrier_id = :id', ['id' => $id]);
+    // `value` is the worth of the whole stack, not a unit price -- 16,690 t of
+    // tritium comes back as one figure of about 815 million, not 48,838. Both
+    // columns therefore accumulate when stacks are merged.
     $stmt = fc_db()->prepare(
         'INSERT INTO fc_cargo (carrier_id, commodity, stolen, loc_name, qty, value)
          VALUES (:cid, :c, :stolen, :loc, :qty, :value)
-         ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty), value = VALUES(value)'
+         ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty), value = value + VALUES(value)'
     );
 
     foreach ($cargo as $item) {

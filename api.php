@@ -117,6 +117,8 @@ function fc_api_carrier(array $carrier, bool $owns): array
             'commodity' => $c['commodity'],
             'name' => $c['loc_name'],
             'qty' => (int) $c['qty'],
+            // Worth of the whole stack, as the Companion API reports it — not
+            // a unit price.
             'value' => (int) $c['value'],
             'stolen' => (bool) $c['stolen'],
         ], fc_all('SELECT * FROM fc_cargo WHERE carrier_id = :id ORDER BY qty DESC', ['id' => $carrier['id']]));

@@ -126,7 +126,9 @@ case 'cargo':
         ['id' => $carrier['id']],
     );
     $tonnes = array_sum(array_map(static fn(array $r) => (int) $r['qty'], $rows));
-    $worth = array_sum(array_map(static fn(array $r) => (int) $r['qty'] * (int) $r['value'], $rows));
+    // The Companion API values a stack as a whole, so this is a sum and not a
+    // sum of products.
+    $worth = array_sum(array_map(static fn(array $r) => (int) $r['value'], $rows));
     ?>
     <div class="card">
       <h2>Cargo hold <span class="muted small">updated <?= fc_e(fc_ago($carrier['cargo_at'])) ?></span></h2>
@@ -148,17 +150,20 @@ case 'cargo':
         </div>
         <div class="tablewrap">
           <table>
-            <thead><tr><th>Commodity</th><th class="num">Quantity</th><th class="num">Unit value</th><th class="num">Total</th></tr></thead>
+            <thead><tr><th>Commodity</th><th class="num">Quantity</th><th class="num">Value</th><th class="num">Per tonne</th></tr></thead>
             <tbody>
-            <?php foreach ($rows as $row): ?>
+            <?php foreach ($rows as $row):
+                $qty = (int) $row['qty'];
+                $value = (int) $row['value'];
+                ?>
               <tr>
                 <td>
                   <?= fc_e($row['loc_name'] ?: ucfirst($row['commodity'])) ?>
                   <?php if ((int) $row['stolen'] === 1): ?><span class="badge bad">Stolen</span><?php endif; ?>
                 </td>
-                <td class="num"><?= fc_num((int) $row['qty']) ?> t</td>
-                <td class="num"><?= fc_cr((int) $row['value']) ?></td>
-                <td class="num"><?= fc_cr((int) $row['qty'] * (int) $row['value']) ?></td>
+                <td class="num"><?= fc_num($qty) ?> t</td>
+                <td class="num"><?= fc_cr($value) ?></td>
+                <td class="num muted"><?= $qty > 0 && $value > 0 ? fc_cr((int) round($value / $qty)) : '—' ?></td>
               </tr>
             <?php endforeach; ?>
             </tbody>
