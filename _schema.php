@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 3;
+const FC_SCHEMA_VERSION = 4;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -326,6 +326,21 @@ function fc_schema_statements(): array
             qty INT NOT NULL DEFAULT 0,
             value BIGINT NOT NULL DEFAULT 0,
             PRIMARY KEY (carrier_id, commodity, stolen)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Answers from Ardent, kept so that reloading the page, or two people
+        // asking the same question, does not mean asking a volunteer-run API
+        // again. Keyed by a hash of the query rather than its parts, because
+        // the parts are only ever compared as a whole.
+        "CREATE TABLE IF NOT EXISTS fc_buyers (
+            query_hash CHAR(40) NOT NULL PRIMARY KEY,
+            commodity VARCHAR(64) NOT NULL,
+            system VARCHAR(128) NOT NULL,
+            min_demand INT NOT NULL DEFAULT 0,
+            max_distance INT NOT NULL DEFAULT 0,
+            payload MEDIUMTEXT NULL,
+            fetched_at DATETIME NOT NULL,
+            KEY fc_buyers_fetched (fetched_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         "CREATE TABLE IF NOT EXISTS fc_uploads (

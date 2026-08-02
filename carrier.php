@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/_lib.php';
 require __DIR__ . '/_render.php';
+require __DIR__ . '/_market.php';
 
 $user = fc_user();
 
@@ -150,7 +151,7 @@ case 'cargo':
         </div>
         <div class="tablewrap">
           <table>
-            <thead><tr><th>Commodity</th><th class="num">Quantity</th><th class="num">Value</th><th class="num">Per tonne</th></tr></thead>
+            <thead><tr><th>Commodity</th><th class="num">Quantity</th><th class="num">Value</th><th class="num">Per tonne</th><th></th></tr></thead>
             <tbody>
             <?php foreach ($rows as $row):
                 $qty = (int) $row['qty'];
@@ -164,6 +165,9 @@ case 'cargo':
                 <td class="num"><?= fc_num($qty) ?> t</td>
                 <td class="num"><?= fc_cr($value) ?></td>
                 <td class="num muted"><?= $qty > 0 && $value > 0 ? fc_cr((int) round($value / $qty)) : '—' ?></td>
+                <td class="right">
+                  <a class="btn ghost sm" href="<?= fc_e(fc_carrier_link($carrier)) ?>&amp;tab=cargo&amp;find=<?= fc_e(rawurlencode((string) $row['commodity'])) ?>">Sell where?</a>
+                </td>
               </tr>
             <?php endforeach; ?>
             </tbody>
@@ -171,7 +175,106 @@ case 'cargo':
         </div>
       <?php endif; ?>
     </div>
+
     <?php
+    // ---- where to sell it -------------------------------------------------
+    $find = trim((string) ($_GET['find'] ?? ''));
+    if ($find !== '' && $rows !== []) {
+        $stack = null;
+        foreach ($rows as $row) {
+            if (strcasecmp((string) $row['commodity'], $find) === 0) {
+                $stack = $row;
+                break;
+            }
+        }
+
+        if ($stack === null) {
+            echo '<div class="card"><div class="empty">That commodity is not in the hold.</div></div>';
+            break;
+        }
+
+        $qty = (int) $stack['qty'];
+        $label = $stack['loc_name'] ?: ucfirst((string) $stack['commodity']);
+        $range = max(50, min(5000, (int) ($_GET['ly'] ?? 1000)));
+
+        if ($carrier['system'] === null) {
+            echo '<div class="card"><div class="empty">The carrier has no known position to search from.</div></div>';
+            break;
+        }
+
+        $buyers = fc_find_buyers((string) $stack['commodity'], (string) $carrier['system'], $qty, $range);
+        ?>
+        <div class="card">
+          <h2>Where to sell <?= fc_e($label) ?>
+            <span class="muted small"><?= fc_num($qty) ?> t, within <?= fc_num($range) ?> ly of <?= fc_e($carrier['system']) ?></span>
+          </h2>
+
+          <?php if ($buyers['error'] !== null): ?>
+            <div class="banner err"><?= fc_e($buyers['error']) ?></div>
+          <?php elseif ($buyers['rows'] === []): ?>
+            <div class="empty">Nobody within <?= fc_num($range) ?> ly is buying <?= fc_e($label) ?>.</div>
+          <?php else: ?>
+            <?php if ($buyers['relaxed']): ?>
+              <div class="banner warn">
+                No station within <?= fc_num($range) ?> ly has demand for the whole <?= fc_num($qty) ?> t.
+                These are the best buyers regardless of how much they will take — check the demand column
+                before hauling.
+              </div>
+            <?php endif; ?>
+
+            <div class="tablewrap">
+              <table>
+                <thead>
+                <tr>
+                  <th>Station</th><th>System</th>
+                  <th class="num">Distance</th><th class="num">Pad</th>
+                  <th class="num">Demand</th><th class="num">Price</th>
+                  <th class="num">Your stack</th><th>Priced</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach (array_slice($buyers['rows'], 0, 15) as $b):
+                    $takes = min($qty, $b['demand']);
+                    $stale = fc_price_is_stale($b['updatedAt']);
+                    ?>
+                  <tr<?= $stale ? ' style="opacity:.55"' : '' ?>>
+                    <td><?= fc_e($b['station']) ?></td>
+                    <td class="muted"><?= fc_e($b['system']) ?></td>
+                    <td class="num"><?= fc_num((int) round($b['distance'])) ?> ly</td>
+                    <td class="num muted"><?= fc_e(fc_pad_label($b['pad'])) ?></td>
+                    <td class="num<?= $b['demand'] >= $qty ? '' : ' muted' ?>"><?= fc_num($b['demand']) ?> t</td>
+                    <td class="num"><?= fc_cr($b['sellPrice']) ?></td>
+                    <td class="num"><?= fc_cr($takes * $b['sellPrice']) ?></td>
+                    <td class="muted small nowrap">
+                      <?= fc_e(fc_ago(substr(str_replace('T', ' ', $b['updatedAt']), 0, 19))) ?>
+                      <?php if ($stale): ?><span class="badge">stale</span><?php endif; ?>
+                    </td>
+                  </tr>
+                <?php endforeach; ?>
+                </tbody>
+              </table>
+            </div>
+
+            <p class="small dim" style="margin-bottom:0">
+              Market data from <a href="https://ardent-insight.com/" rel="noopener">Ardent</a>, cached for six hours.
+              Fleet carriers are excluded — their owners set arbitrary prices and they move. "Your stack" is what
+              the buyer would pay for as much of your <?= fc_num($qty) ?> t as they will actually take.
+              <?php if ($buyers['fetched_at'] !== null): ?>
+                Looked up <?= fc_e(fc_ago($buyers['fetched_at'])) ?>.
+              <?php endif; ?>
+            </p>
+
+            <div class="actions">
+              <?php foreach ([500, 1000, 2000] as $option): ?>
+                <?php if ($option !== $range): ?>
+                  <a class="btn ghost sm" href="<?= fc_e(fc_carrier_link($carrier)) ?>&amp;tab=cargo&amp;find=<?= fc_e(rawurlencode((string) $stack['commodity'])) ?>&amp;ly=<?= $option ?>">Within <?= fc_num($option) ?> ly</a>
+                <?php endif; ?>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
+        </div>
+        <?php
+    }
     break;
 
 // ---------------------------------------------------------------------------
