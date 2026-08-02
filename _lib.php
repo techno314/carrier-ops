@@ -557,7 +557,7 @@ function fc_head(string $title, string $active = ''): void
 <body>
 <header class="topbar">
   <a class="brand" href="<?= fc_e(fc_url()) ?>">
-    <span class="brand-mark"></span>
+    <?= fc_logo_svg(26, 'nav') ?>
     <span>Carrier&nbsp;Ops</span>
   </a>
   <nav>
@@ -598,14 +598,57 @@ function fc_asset_version(): string
     return $mtime === false ? '0' : (string) $mtime;
 }
 
+/**
+ * The mark: a Drake-Class carrier in profile.
+ *
+ * Drawn from the silhouette that actually identifies one — a long flat flight
+ * deck with the command tower set well back, a blunt prow, and the engine block
+ * behind. Kept to three solid shapes because it has to survive being a 16px
+ * favicon; anything finer turns to porridge at that size. The two notches in
+ * the deck are landing pads, and are the first thing to disappear when small,
+ * which is fine — the slab-and-tower shape is what carries the recognition.
+ *
+ * @param string $idSuffix unique per use, so two copies on one page do not
+ *                         share a gradient id
+ */
+function fc_logo_svg(int $size = 32, string $idSuffix = 'brand', bool $plate = true): string
+{
+    $gradient = 'fclogo-' . $idSuffix;
+
+    $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="' . $size . '" height="' . $size
+        . '" role="img" aria-label="Carrier Ops">'
+        . '<defs><linearGradient id="' . $gradient . '" x1="0" y1="0" x2="0.7" y2="1">'
+        . '<stop offset="0" stop-color="#ffc38a"/>'
+        . '<stop offset="0.55" stop-color="#ff9440"/>'
+        . '<stop offset="1" stop-color="#f0741a"/>'
+        . '</linearGradient></defs>';
+
+    if ($plate) {
+        $svg .= '<rect width="32" height="32" rx="7.5" fill="#12161d"/>';
+    }
+
+    // Flight deck: flat top, blunt prow to the right, chamfered underside.
+    $svg .= '<path d="M4 18.2h18.6l5.4 2.6-3.1 3.4H5.6L4 21.4z" fill="url(#' . $gradient . ')"/>';
+
+    // Command tower, set back over the stern the way the real thing is.
+    $svg .= '<path d="M7.1 7.4h6.6l1.3 10.8H5.9z" fill="url(#' . $gradient . ')"/>';
+
+    // Comms mast.
+    $svg .= '<rect x="9.7" y="3.4" width="1.5" height="4.2" rx="0.75" fill="#ffc38a"/>';
+
+    // Engine block at the stern, brighter so it reads as thrust.
+    $svg .= '<path d="M2.1 19h2v3.6h-2z" fill="#ffd9b3"/>';
+
+    // Landing pads punched out of the deck.
+    $svg .= '<rect x="16.4" y="19.9" width="2.4" height="1.6" rx="0.5" fill="#12161d" opacity="0.55"/>'
+        . '<rect x="20" y="19.9" width="2.4" height="1.6" rx="0.5" fill="#12161d" opacity="0.55"/>';
+
+    return $svg . '</svg>';
+}
+
 function fc_favicon(): string
 {
-    $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-        . '<rect width="32" height="32" rx="8" fill="#12161d"/>'
-        . '<path d="M6 19h20l-3 5H9z" fill="#ff8a3d"/>'
-        . '<path d="M9 12h14l3 6H6z" fill="#ffb066"/>'
-        . '<circle cx="16" cy="9" r="2.5" fill="#ff8a3d"/></svg>';
-    return 'data:image/svg+xml;base64,' . base64_encode($svg);
+    return 'data:image/svg+xml;base64,' . base64_encode(fc_logo_svg(32, 'icon'));
 }
 
 /** One-shot banner passed through a redirect. */
