@@ -176,7 +176,16 @@ function fc_ts(mixed $iso): ?string
     return $t === false ? null : gmdate('Y-m-d H:i:s', $t);
 }
 
-/** `$mineraloil_name;` → `mineraloil`. Leaves plain names alone. */
+/**
+ * `$mineraloil_name;` → `mineraloil`. Leaves plain names alone.
+ *
+ * Folded to lower case because the two sources disagree: the journal writes
+ * `int_fighterbay_size5_class1_free` and the Companion API writes
+ * `Int_FighterBay_Size5_Class1_Free` for the same module. These strings are
+ * keys, not display text — the readable name lives in loc_name — so the only
+ * thing case buys here is two rows for one thing on any table whose collation
+ * is not already case-insensitive.
+ */
 function fc_clean_symbol(?string $raw): string
 {
     if ($raw === null) {
@@ -188,7 +197,7 @@ function fc_clean_symbol(?string $raw): string
     }
     $s = preg_replace('/;$/', '', $s) ?? $s;
     $s = preg_replace('/_name$/i', '', $s) ?? $s;
-    return $s;
+    return strtolower($s);
 }
 
 /**
@@ -1100,20 +1109,41 @@ function fc_ev_outfitting(array $carrier, array $event, ?string $ts): bool
     return true;
 }
 
-/** `hpt_pulselaser_fixed_small` → `Pulselaser Fixed Small`. */
+/**
+ * `hpt_pulselaser_fixed_small` → `Pulse Laser, Fixed, Small`.
+ *
+ * Frontier's symbols are the only name either source gives us, so this is
+ * cosmetics on top of them rather than a real lookup table. `_free` on a
+ * fighter bay is the game's own marker for the loaner variants that show up in
+ * a carrier's outfitting list at no cost, and is worth keeping visible.
+ */
 function fc_module_label(string $symbol): string
 {
-    $s = preg_replace('/^(hpt|int|armour)_/i', '', $symbol) ?? $symbol;
+    $s = preg_replace('/^(hpt|int|armour)_/i', '', strtolower($symbol)) ?? $symbol;
     $s = str_replace('_', ' ', $s);
+
+    // "fighterbaymk2" has no word boundary before the mk, so the compound
+    // spelling has to be dealt with before the general size/class split.
+    $s = preg_replace('/fighterbaymk(\d+)/', 'fighter bay mk$1', $s) ?? $s;
+    $s = preg_replace('/fighterbay/', 'fighter bay', $s) ?? $s;
+    $s = preg_replace('/\b(size|class)(\d+)\b/', '$1 $2', $s) ?? $s;
+    $s = preg_replace('/\bfree\b/', '(free)', $s) ?? $s;
+
     return mb_substr(ucwords($s), 0, 128);
 }
 
+/**
+ * The journal writes these symbols lower case and the Companion API writes
+ * them capitalised, so the prefix test has to ignore case or every module from
+ * one of the two sources lands in "Other".
+ */
 function fc_module_category(string $symbol): string
 {
+    $s = strtolower($symbol);
     return match (true) {
-        str_starts_with($symbol, 'hpt_') => 'Hardpoint',
-        str_starts_with($symbol, 'int_') => 'Internal',
-        str_starts_with($symbol, 'armour_') => 'Armour',
+        str_starts_with($s, 'hpt_') => 'Hardpoint',
+        str_starts_with($s, 'int_') => 'Internal',
+        str_starts_with($s, 'armour_') => 'Armour',
         default => 'Other',
     };
 }

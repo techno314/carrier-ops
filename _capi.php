@@ -488,13 +488,24 @@ function fc_capi_apply_outfitting(int $id, array $data, string $ts): void
         if ($module === '') {
             continue;
         }
+        // Frontier's `category` here is the literal string "module" for every
+        // row, which tells a reader nothing. The symbol prefix does better.
+        $category = (string) ($item['category'] ?? '');
+        if ($category === '' || strcasecmp($category, 'module') === 0) {
+            $category = fc_module_category($module);
+        }
+
+        // A stock of -1 means the game does not track a count for this, not
+        // that it owes you one.
+        $stock = fc_first_number($item, ['stock']) ?? 1;
+
         $stmt->execute([
             'cid' => $id,
             'module' => mb_substr($module, 0, 96),
             'loc' => fc_module_label($module),
-            'cat' => $item['category'] ?? fc_module_category($module),
+            'cat' => $category,
             'cost' => (int) ($item['cost'] ?? 0),
-            'stock' => (int) ($item['stock'] ?? 1),
+            'stock' => $stock < 0 ? 0 : $stock,
         ]);
     }
 
