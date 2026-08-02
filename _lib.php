@@ -261,6 +261,33 @@ function fc_duration(int $secs): string
     return $days . 'd ' . ($hours % 24) . 'h';
 }
 
+/**
+ * A week count in units a person can picture.
+ *
+ * A well-funded carrier runs to hundreds of weeks, which stops meaning
+ * anything past about a year, so say it in months or years instead. Returns
+ * null below two months, where the week count is already the clearest form.
+ */
+function fc_weeks_span(?int $weeks): ?string
+{
+    if ($weeks === null || $weeks < 9) {
+        return null;
+    }
+    if ($weeks < 52) {
+        $months = (int) round($weeks / 4.345);
+        return $months . ' month' . ($months === 1 ? '' : 's');
+    }
+
+    $years = $weeks / 52.18;   // mean weeks per calendar year
+    // One decimal is worth having at 1.4 years; at 14 it is noise. Trailing
+    // zeros go, so 104 weeks reads "2 years" rather than "2.0 years".
+    $figure = $years < 10
+        ? rtrim(rtrim(number_format($years, 1), '0'), '.')
+        : number_format($years, 0);
+
+    return $figure . ' year' . ($figure === '1' ? '' : 's');
+}
+
 function fc_dt(?string $ts): string
 {
     if ($ts === null || $ts === '') {

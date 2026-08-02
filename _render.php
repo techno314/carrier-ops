@@ -232,7 +232,13 @@ function fc_render_upkeep(array $carrier, array $crew): void
             <div class="v" style="color:var(--danger)">Under one week</div>
             <div class="muted small" style="margin-top:6px">Top up before <?= fc_e(gmdate('D j M', (int) $solvency['broke_at'])) ?></div>
           <?php else: ?>
-            <div class="v"><?= $solvency['weeks'] ?> week<?= $solvency['weeks'] === 1 ? '' : 's' ?></div>
+            <?php $span = fc_weeks_span($solvency['weeks']); ?>
+            <div class="v">
+              <?= $solvency['weeks'] ?> week<?= $solvency['weeks'] === 1 ? '' : 's' ?>
+              <?php if ($span !== null): ?>
+                <span class="muted small">· <?= fc_e($span) ?></span>
+              <?php endif; ?>
+            </div>
             <div class="muted small" style="margin-top:6px">runs dry around <?= fc_e(gmdate('j M Y', (int) $solvency['broke_at'])) ?></div>
           <?php endif; ?>
         </div>

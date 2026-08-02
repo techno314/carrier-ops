@@ -106,6 +106,7 @@ function fc_api_carrier(array $carrier, bool $owns): array
             'weekly' => $upkeep['total'],
             'jumpFeesThisWeek' => $solvency['jump_fees'],
             'weeksSolvent' => $solvency['weeks'],
+            'solventFor' => fc_weeks_span($solvency['weeks']),
             'nextChargeAt' => gmdate('c', fc_next_upkeep_tick()),
             'estimated' => true,
             'lines' => $upkeep['lines'],
