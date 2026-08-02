@@ -54,8 +54,14 @@ function fc_pct(?int $part, ?int $whole): float
     return max(0.0, min(100.0, ($part / $whole) * 100));
 }
 
-/** Header block: name, callsign, where it is, what state it is in. */
-function fc_render_carrier_title(array $carrier, ?array $viewer = null): void
+/**
+ * Header block: name, callsign, where it is, what state it is in.
+ *
+ * `$linkCallsign` turns the callsign into a link to the carrier's own page.
+ * The dashboard wants that; the carrier page itself does not, since a link to
+ * where you already are is just a dead end that looks like a way out.
+ */
+function fc_render_carrier_title(array $carrier, bool $linkCallsign = false): void
 {
     $pendingJump = fc_one(
         "SELECT * FROM fc_jumps WHERE carrier_id = :id AND status = 'scheduled' AND departure_time > UTC_TIMESTAMP()
@@ -66,7 +72,13 @@ function fc_render_carrier_title(array $carrier, ?array $viewer = null): void
     <div class="titlerow">
       <div>
         <h1><?= fc_e(fc_carrier_display_name($carrier)) ?>
-          <span class="callsign"><?= fc_e($carrier['callsign'] ?? '') ?></span>
+          <?php $callsign = $carrier['callsign'] ?? ''; ?>
+          <?php if ($callsign !== '' && $linkCallsign): ?>
+            <a class="callsign" href="<?= fc_e(fc_carrier_link($carrier)) ?>"
+               title="Open <?= fc_e($callsign) ?>"><?= fc_e($callsign) ?></a>
+          <?php elseif ($callsign !== ''): ?>
+            <span class="callsign"><?= fc_e($callsign) ?></span>
+          <?php endif; ?>
         </h1>
         <p class="muted small" style="margin:0">
           <?php if ($carrier['system'] !== null): ?>

@@ -88,7 +88,7 @@ fc_head(fc_carrier_display_name($carrier), 'search');
 ?>
 <main class="wrap">
   <?php fc_render_flash(); ?>
-  <?php fc_render_carrier_title($carrier, $user); ?>
+  <?php fc_render_carrier_title($carrier); ?>
 
   <?php if ($carrier['motd'] !== null && $carrier['motd'] !== ''): ?>
     <div class="banner"><?= nl2br(fc_e($carrier['motd'])) ?></div>

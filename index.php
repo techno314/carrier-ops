@@ -76,7 +76,7 @@ fc_head('Dashboard');
     <?php
     $primary = $mine[0];
     $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $primary['id']]);
-    fc_render_carrier_title($primary, $user);
+    fc_render_carrier_title($primary, true);
     fc_render_carrier_stats($primary, true);
     ?>
 

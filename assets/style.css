@@ -270,6 +270,10 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .titlerow { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
 .titlerow .spacer { flex: 1; }
 .callsign { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--accent); }
+/* When the callsign is a link it should look like one on hover, without
+   shifting the heading's layout the way a permanent underline would. */
+a.callsign { text-decoration: none; border-bottom: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent); }
+a.callsign:hover { color: var(--accent-hover); border-bottom-color: var(--accent-hover); text-decoration: none; }
 
 /* ---- drop zone --------------------------------------------------------- */
 
