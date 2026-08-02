@@ -49,7 +49,7 @@ fc_head('EDMC plugin', 'upload');
       </div>
     <?php else: ?>
       <div class="actions">
-        <a class="btn ghost" href="<?= fc_e(fc_url('login.php')) ?>">Sign in to get an API key</a>
+        <a class="btn ghost" href="<?= fc_e(fc_url('account.php?do=login')) ?>">Sign in to get an API key</a>
       </div>
     <?php endif; ?>
   </div>

@@ -91,5 +91,5 @@ under `EDMarketConnector.CarrierOps`.
 
 ## Licence
 
-BSD-3-Clause, copyright 2026 snoog. Contains no EDMarketConnector code; it uses EDMC's documented
+BSD-3-Clause, copyright 2026 Carrier Ops. Contains no EDMarketConnector code; it uses EDMC's documented
 plugin entry points. See `NOTICE.md` in the parent project.

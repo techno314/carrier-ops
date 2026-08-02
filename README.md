@@ -178,7 +178,9 @@ the key owns the carrier.
 
 ## Layout
 
-Every `.php` in the root is a URL; nothing else is.
+Every `.php` in the root is a URL; nothing else is. There is no rewrite available to this app —
+nginx's fallback points at the docroot's `index.php`, not ours — so a page and a file are the same
+thing, and the account flow is one file rather than five.
 
 ```
 index.php       dashboard (signed in) or the pitch (signed out)
@@ -188,8 +190,7 @@ upload.php      drag-and-drop journal upload
 plugin.php      EDMC plugin download and install notes
 settings.php    profile, password, API key, admin promotion
 api.php         JSON API
-login.php  register.php  logout.php
-forgot.php reset.php   password reset by email
+account.php     sign in, register, sign out, password reset
 
 lib/core.php    config, database, sessions, CSRF, formatting, page chrome
 lib/schema.php  table definitions and the migration runner

@@ -345,7 +345,7 @@ function fc_require_user(): array
         if (fc_wants_json()) {
             fc_json(401, ['error' => 'Sign in to continue', 'needsAuth' => true]);
         }
-        fc_redirect(fc_url('login.php?next=' . rawurlencode($_SERVER['REQUEST_URI'] ?? '/fc/')));
+        fc_redirect(fc_url('account.php?do=login&next=' . rawurlencode($_SERVER['REQUEST_URI'] ?? '/fc/')));
     }
     return $user;
 }
@@ -577,9 +577,9 @@ function fc_head(string $title, string $active = ''): void
   <div class="who">
     <?php if ($user !== null): ?>
       <span class="muted"><?= fc_e($user['username']) ?></span>
-      <a class="btn ghost sm" href="<?= fc_e(fc_url('logout.php')) ?>">Sign out</a>
+      <a class="btn ghost sm" href="<?= fc_e(fc_url('account.php?do=logout')) ?>">Sign out</a>
     <?php else: ?>
-      <a class="btn ghost sm" href="<?= fc_e(fc_url('login.php')) ?>">Sign in</a>
+      <a class="btn ghost sm" href="<?= fc_e(fc_url('account.php?do=login')) ?>">Sign in</a>
     <?php endif; ?>
   </div>
 </header>

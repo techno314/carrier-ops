@@ -28,8 +28,8 @@ if ($user === null) {
           script at the upload endpoint, and the board keeps itself current.
         </p>
         <div class="actions">
-          <a class="btn" href="<?= fc_e(fc_url('register.php')) ?>">Create an account</a>
-          <a class="btn ghost" href="<?= fc_e(fc_url('login.php')) ?>">Sign in</a>
+          <a class="btn" href="<?= fc_e(fc_url('account.php?do=register')) ?>">Create an account</a>
+          <a class="btn ghost" href="<?= fc_e(fc_url('account.php?do=login')) ?>">Sign in</a>
           <a class="btn ghost" href="<?= fc_e(fc_url('search.php')) ?>">Browse carriers</a>
         </div>
       </div>
