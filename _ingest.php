@@ -629,6 +629,17 @@ function fc_ev_trade_order(array $carrier, array $event, ?string $ts): bool
     if ($commodity === '') {
         return false;
     }
+
+    // Once the Companion API has shown us the real order book, journal
+    // placements older than that reading are history and must not come back.
+    // Nothing reports an order being *filled*, so re-uploading an old journal
+    // would otherwise resurrect every trade the owner ever set up — which is
+    // exactly what happened the first time these were cleared.
+    if ($carrier['orders_at'] !== null && $ts !== null
+        && strcmp((string) $carrier['orders_at'], $ts) > 0
+    ) {
+        return false;
+    }
     $blackMarket = (int) (bool) ($event['BlackMarket'] ?? false);
 
     if (!empty($event['CancelTrade'])) {
