@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 4;
+const FC_SCHEMA_VERSION = 5;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -59,6 +59,7 @@ function fc_migrate(): void
         $db->exec($sql);
     }
     fc_ensure_columns();
+    fc_drop_columns();
 
     // Record it in the database too, so a wiped sentinel does not hide which
     // version the live tables are actually at.
@@ -123,6 +124,35 @@ function fc_ensure_columns(): void
     }
 }
 
+/**
+ * Remove columns a later version stopped using.
+ *
+ * Same catalogue lookup as fc_ensure_columns, in reverse. Dropping is more
+ * dangerous than adding, so this list stays short and explicit.
+ */
+function fc_drop_columns(): void
+{
+    // Discord sign-in was never enabled and has been removed.
+    $unwanted = ['fc_users' => ['discord_id']];
+
+    $db = fc_db();
+    foreach ($unwanted as $table => $columns) {
+        foreach ($columns as $column) {
+            $stmt = $db->prepare(
+                'SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c'
+            );
+            $stmt->execute(['t' => $table, 'c' => $column]);
+            if ((int) ($stmt->fetch()['n'] ?? 0) === 0) {
+                continue;
+            }
+            // The unique index on it has to go first.
+            $db->exec("ALTER TABLE `{$table}` DROP INDEX `fc_users_discord`");
+            $db->exec("ALTER TABLE `{$table}` DROP COLUMN `{$column}`");
+        }
+    }
+}
+
 /** @return string[] */
 function fc_schema_statements(): array
 {
@@ -139,15 +169,13 @@ function fc_schema_statements(): array
             password_hash VARCHAR(255) NOT NULL,
             api_key_hash CHAR(64) NULL,
             cmdr_name VARCHAR(64) NULL,
-            discord_id VARCHAR(32) NULL,
             is_admin TINYINT(1) NOT NULL DEFAULT 0,
             is_banned TINYINT(1) NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             last_login DATETIME NULL,
             UNIQUE KEY fc_users_username (username),
             UNIQUE KEY fc_users_email (email),
-            UNIQUE KEY fc_users_api_key (api_key_hash),
-            UNIQUE KEY fc_users_discord (discord_id)
+            UNIQUE KEY fc_users_api_key (api_key_hash)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         "CREATE TABLE IF NOT EXISTS fc_sessions (
@@ -341,6 +369,20 @@ function fc_schema_statements(): array
             payload MEDIUMTEXT NULL,
             fetched_at DATETIME NOT NULL,
             KEY fc_buyers_fetched (fetched_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Reset tokens are stored hashed, like session tokens: the mail is the
+        // only place the usable value ever exists.
+        "CREATE TABLE IF NOT EXISTS fc_password_resets (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            user_id INT UNSIGNED NOT NULL,
+            token_hash CHAR(64) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            used_at DATETIME NULL,
+            requested_ip VARBINARY(16) NULL,
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY fc_resets_token (token_hash),
+            KEY fc_resets_user (user_id, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         "CREATE TABLE IF NOT EXISTS fc_uploads (

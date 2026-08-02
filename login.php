@@ -80,6 +80,7 @@ fc_head('Sign in');
       <div class="actions">
         <button class="btn" type="submit">Sign in</button>
         <a class="small muted" href="<?= fc_e(fc_url('register.php')) ?>">Create an account</a>
+        <a class="small muted" href="<?= fc_e(fc_url('forgot.php')) ?>">Forgotten password</a>
       </div>
     </form>
   </div>

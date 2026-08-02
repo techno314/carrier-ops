@@ -91,18 +91,6 @@ function fc_admin_code(): ?string
     return $raw === '' ? null : $raw;
 }
 
-/**
- * Discord sign-in is opt-in because it needs a redirect URI registered in the
- * Discord developer portal (https://grayflare.space/fc/auth.php). Until that
- * exists the button would dead-end, so it stays hidden rather than broken.
- */
-function fc_discord_enabled(): bool
-{
-    return fc_env('FC_DISCORD_LOGIN') === '1'
-        && fc_env('DISCORD_CLIENT_ID') !== null
-        && fc_env('DISCORD_CLIENT_SECRET') !== null;
-}
-
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------

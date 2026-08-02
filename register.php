@@ -92,7 +92,7 @@ fc_head('Create an account');
       </div>
 
       <div class="field">
-        <label for="email">Email <span class="dim">(optional — there is no password reset without it)</span></label>
+        <label for="email">Email <span class="dim">(optional, but needed to reset a forgotten password)</span></label>
         <input id="email" name="email" type="email" value="<?= fc_e($email) ?>" autocomplete="email">
       </div>
 
