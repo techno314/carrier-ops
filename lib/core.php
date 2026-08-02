@@ -14,8 +14,15 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-require_once __DIR__ . '/_costs.php';
-require_once __DIR__ . '/_schema.php';
+/**
+ * The application root — the directory the page scripts live in, one above
+ * this one. Anything that reads a file belonging to the deployment rather than
+ * to the library uses this, because __DIR__ in here is `lib/`.
+ */
+define('FC_ROOT', dirname(__DIR__));
+
+require_once __DIR__ . '/costs.php';
+require_once __DIR__ . '/schema.php';
 
 const FC_SESSION_COOKIE = 'fc_session';
 const FC_SESSION_TTL = 2592000;   // 30 days
@@ -59,13 +66,7 @@ function fc_url(string $path = ''): string
 }
 
 /**
- * Discord sign-in is opt-in because it needs a redirect URI registered in the
- * Discord developer portal (https://grayflare.space/fc/auth.php). Until that
- * exists the button would dead-end, so it stays hidden rather than broken —
- * which is the exact failure this app was written to avoid.
- */
-/**
- * The code that grants admin, from `.htadmin-code` next to this file or from
+ * The code that grants admin, from `.htadmin-code` in the app root or from
  * FC_ADMIN_CODE.
  *
  * Admin can read and take over any carrier on the board, so it is granted by
@@ -82,7 +83,7 @@ function fc_admin_code(): ?string
     if ($env !== null) {
         return $env;
     }
-    $raw = @file_get_contents(__DIR__ . '/.htadmin-code');
+    $raw = @file_get_contents(FC_ROOT . '/.htadmin-code');
     if ($raw === false) {
         return null;
     }
@@ -90,6 +91,11 @@ function fc_admin_code(): ?string
     return $raw === '' ? null : $raw;
 }
 
+/**
+ * Discord sign-in is opt-in because it needs a redirect URI registered in the
+ * Discord developer portal (https://grayflare.space/fc/auth.php). Until that
+ * exists the button would dead-end, so it stays hidden rather than broken.
+ */
 function fc_discord_enabled(): bool
 {
     return fc_env('FC_DISCORD_LOGIN') === '1'
@@ -612,7 +618,7 @@ function fc_foot(): void
  */
 function fc_asset_version(string $file = 'style.css'): string
 {
-    $mtime = @filemtime(__DIR__ . '/assets/' . $file);
+    $mtime = @filemtime(FC_ROOT . '/assets/' . $file);
     return $mtime === false ? '0' : (string) $mtime;
 }
 

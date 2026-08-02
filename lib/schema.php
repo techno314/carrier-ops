@@ -47,7 +47,7 @@ function fc_ensure_schema(): void
 function fc_sentinel_paths(): array
 {
     return [
-        __DIR__ . '/.schema-version',
+        FC_ROOT . '/.schema-version',
         sys_get_temp_dir() . '/fc-schema-version',
     ];
 }

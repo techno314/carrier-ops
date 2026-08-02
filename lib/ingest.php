@@ -20,7 +20,7 @@ declare(strict_types=1);
  *   Market/Shipyard/Outfitting.json   the commodity, ship and module lists
  *
  * The two things it cannot give us are the exact upkeep breakdown (see
- * _costs.php, which reconstructs it) and the carrier's cargo manifest, for
+ * lib/costs.php, which reconstructs it) and the carrier's cargo manifest, for
  * which the market snapshot's stock figures stand in.
  *
  * Only carrier-related events are read. Everything else in the journal —
@@ -33,7 +33,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-require_once __DIR__ . '/_capi.php';
+require_once __DIR__ . '/capi.php';
 
 /**
  * Events that only ever appear in the carrier owner's own journal. Seeing one

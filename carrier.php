@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/_lib.php';
-require __DIR__ . '/_render.php';
-require __DIR__ . '/_market.php';
+require __DIR__ . '/lib/core.php';
+require __DIR__ . '/lib/render.php';
+require __DIR__ . '/lib/market.php';
 
 $user = fc_user();
 

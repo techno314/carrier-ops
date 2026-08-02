@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/_lib.php';
-require __DIR__ . '/_render.php';
+require __DIR__ . '/lib/core.php';
+require __DIR__ . '/lib/render.php';
 
 $user = fc_user();
 $query = trim((string) ($_GET['q'] ?? ''));
