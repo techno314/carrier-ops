@@ -68,6 +68,22 @@ function fc_render_carrier_title(array $carrier, bool $linkCallsign = false): vo
           ORDER BY departure_time ASC LIMIT 1",
         ['id' => $carrier['id']],
     );
+
+    // When the carrier arrived is not the same question as when we last heard
+    // where it is. `location_at` answers the second: a Companion API payload
+    // stamps it with the time of the payload, so a carrier parked for a week
+    // would claim to have arrived minutes ago. The open itinerary stop holds
+    // the real arrival, and is only trusted when it agrees about the system.
+    $arrivedAt = null;
+    $here = fc_one(
+        'SELECT system, arrival_time FROM fc_itinerary
+          WHERE carrier_id = :id AND departure_time IS NULL
+          ORDER BY arrival_time DESC LIMIT 1',
+        ['id' => $carrier['id']],
+    );
+    if ($here !== null && $here['system'] === $carrier['system']) {
+        $arrivedAt = $here['arrival_time'];
+    }
     ?>
     <div class="titlerow">
       <div>
@@ -85,7 +101,11 @@ function fc_render_carrier_title(array $carrier, bool $linkCallsign = false): vo
             <?= fc_e($carrier['system']) ?><?php if ($carrier['body'] !== null && $carrier['body'] !== $carrier['system']): ?>
               <span class="dim">· <?= fc_e($carrier['body']) ?></span>
             <?php endif; ?>
-            <span class="dim">· arrived <?= fc_e(fc_ago($carrier['location_at'])) ?></span>
+            <?php if ($arrivedAt !== null): ?>
+              <span class="dim" title="<?= fc_e(fc_dt($arrivedAt)) ?>">· arrived <?= fc_e(fc_ago($arrivedAt)) ?></span>
+            <?php else: ?>
+              <span class="dim" title="<?= fc_e(fc_dt($carrier['location_at'])) ?>">· position seen <?= fc_e(fc_ago($carrier['location_at'])) ?></span>
+            <?php endif; ?>
           <?php else: ?>
             <span class="dim">Location unknown</span>
           <?php endif; ?>

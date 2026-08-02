@@ -166,6 +166,10 @@ function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts,
     // The journal is the better source of position -- it is written the moment
     // the carrier arrives, while this is whatever the last CAPI query saw. Only
     // fill it in when it is genuinely newer.
+    //
+    // Note what `location_at` then means: when we last *heard* the position,
+    // not when the carrier got there. It is a staleness guard, not an arrival
+    // time. Anything wanting the latter reads the open itinerary stop.
     if (isset($data['currentStarSystem']) && !fc_stale($carrier, 'location_at', $ts)) {
         $fields['system'] = (string) $data['currentStarSystem'];
         $fields['location_at'] = $ts;
