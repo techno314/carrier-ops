@@ -4,14 +4,33 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/lib/core.php';
 require_once __DIR__ . '/lib/render.php';
+require_once __DIR__ . '/lib/admin.php';
 
 $user = fc_require_user();
 $error = null;
 $freshKey = null;
 
+// The admin panel is a view of this same page rather than a script of its own,
+// following account.php: nginx here cannot rewrite for this app, so every page
+// is a real file and the docroot is kept short deliberately.
+$isAdminView = ($_GET['do'] ?? '') === 'admin';
+if ($isAdminView && (int) $user['is_admin'] !== 1) {
+    fc_fail(403, 'That is for admins.');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     fc_check_csrf();
     $action = (string) ($_POST['action'] ?? '');
+
+    if (str_starts_with($action, 'admin_')) {
+        // Re-checked here and not only on the view: a POST arrives on its own
+        // and must never trust that the form it came from was ever shown.
+        if ((int) $user['is_admin'] !== 1) {
+            fc_fail(403, 'That is for admins.');
+        }
+        fc_handle_admin_post($action, $user);
+        fc_redirect(fc_url('settings.php?do=admin'));
+    }
 
     if ($action === 'profile') {
         $cmdr = trim((string) ($_POST['cmdr'] ?? ''));
@@ -103,6 +122,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         fc_flash('API key revoked.');
         fc_redirect(fc_url('settings.php'));
     }
+}
+
+if ($isAdminView) {
+    fc_head('Admin', 'settings');
+    fc_render_admin($user);
+    fc_foot();
+    exit;
 }
 
 $carriers = fc_all('SELECT * FROM fc_carriers WHERE owner_user_id = :uid ORDER BY updated_at DESC', ['uid' => $user['id']]);
@@ -237,7 +263,13 @@ fc_head('Settings', 'settings');
   <?php elseif ((int) $user['is_admin'] === 1): ?>
     <div class="card">
       <h2>Admin</h2>
-      <p class="muted small" style="margin-bottom:0">This account is an admin. It can see and manage every carrier on the board.</p>
+      <p class="muted small">
+        This account is an admin. It can see and manage every carrier on the board, suspend accounts,
+        and hand the role to somebody else.
+      </p>
+      <div class="actions">
+        <a class="btn" href="<?= fc_e(fc_url('settings.php?do=admin')) ?>">Open the admin panel</a>
+      </div>
     </div>
   <?php endif; ?>
 

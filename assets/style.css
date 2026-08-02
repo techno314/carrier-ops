@@ -231,6 +231,10 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .check input { margin-top: 3px; }
 .check label { margin: 0; color: var(--text); font-size: 0.9rem; }
 
+/* Several one-click actions per table row, kept on one line and allowed to
+   wrap on a narrow screen rather than stacking into a column of buttons. */
+form.inline { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
 /* Sits directly under the nav on every page while an address is unconfirmed,
    so the reason an upload will be refused is on screen before it is tried. */
 .verifybar {
