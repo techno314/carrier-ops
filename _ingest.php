@@ -1092,7 +1092,8 @@ function fc_ev_outfitting(array $carrier, array $event, ?string $ts): bool
 
     foreach ($items as $item) {
         $module = fc_clean_symbol($item['Name'] ?? null);
-        if ($module === '') {
+        $cost = (int) ($item['BuyPrice'] ?? 0);
+        if ($module === '' || !fc_is_stocked_module($module, $cost)) {
             continue;
         }
         $stmt->execute([
@@ -1100,7 +1101,7 @@ function fc_ev_outfitting(array $carrier, array $event, ?string $ts): bool
             'module' => mb_substr($module, 0, 96),
             'loc' => fc_module_label($module),
             'cat' => fc_module_category($module),
-            'cost' => (int) ($item['BuyPrice'] ?? 0),
+            'cost' => $cost,
             'stock' => 1,
         ]);
     }
@@ -1137,6 +1138,22 @@ function fc_module_label(string $symbol): string
  * them capitalised, so the prefix test has to ignore case or every module from
  * one of the two sources lands in "Other".
  */
+/**
+ * Whether an outfitting entry is real stock.
+ *
+ * A carrier's outfitting list always contains the `_free` fighter bay
+ * variants at zero credits, whether or not anything is actually stocked. They
+ * are not for sale and cannot be bought; they are how the game says the list
+ * is empty. Showing six of them reads as inventory when it is the opposite.
+ *
+ * Both conditions are required: a `_free` suffix alone is not enough to
+ * discard something that has a real price on it.
+ */
+function fc_is_stocked_module(string $symbol, int $cost): bool
+{
+    return !($cost === 0 && str_ends_with(strtolower($symbol), '_free'));
+}
+
 function fc_module_category(string $symbol): string
 {
     $s = strtolower($symbol);

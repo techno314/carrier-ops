@@ -346,6 +346,20 @@ function fc_render_taxes(array $carrier): void
     <?php
 }
 
+/**
+ * The empty state for a list that has a "last fetched" timestamp.
+ *
+ * An empty table means two entirely different things depending on whether we
+ * have ever read that part of the carrier. Saying "upload the file" to someone
+ * whose shipyard is simply empty sends them to do something pointless, and
+ * saying "nothing stocked" when we have never looked is a claim we cannot
+ * make.
+ */
+function fc_render_empty(?string $fetchedAt, string $emptyMessage, string $neverMessage): void
+{
+    echo '<div class="empty">' . ($fetchedAt === null ? $neverMessage : fc_e($emptyMessage)) . '</div>';
+}
+
 /** A short row in a list of carriers. */
 function fc_render_carrier_row(array $carrier): void
 {

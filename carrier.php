@@ -184,10 +184,12 @@ case 'market':
     <div class="card">
       <h2>Commodity market <span class="muted small">updated <?= fc_e(fc_ago($carrier['market_at'])) ?></span></h2>
       <?php if ($rows === []): ?>
-        <div class="empty">
-          Nothing yet. Upload <code>Market.json</code> from your journal folder while docked at the carrier —
-          the game rewrites it every time you open the commodity screen.
-        </div>
+        <?php fc_render_empty(
+            $carrier['market_at'],
+            'Nothing on the market.',
+            'Nothing yet. Upload <code>Market.json</code> from your journal folder while docked at the carrier — '
+                . 'the game rewrites it every time you open the commodity screen.',
+        ); ?>
       <?php else: ?>
         <div class="tablewrap">
           <table>
@@ -363,7 +365,11 @@ case 'shipyard':
     <div class="card">
       <h2>Shipyard <span class="muted small">updated <?= fc_e(fc_ago($carrier['shipyard_at'])) ?></span></h2>
       <?php if ($rows === []): ?>
-        <div class="empty">Nothing yet. Upload <code>Shipyard.json</code> while docked at the carrier.</div>
+        <?php fc_render_empty(
+            $carrier['shipyard_at'],
+            'No ships in stock.',
+            'Nothing yet. Upload <code>Shipyard.json</code> while docked at the carrier.',
+        ); ?>
       <?php else: ?>
         <div class="tablewrap">
           <table>
@@ -390,9 +396,13 @@ case 'outfitting':
     <div class="card">
       <h2>Outfitting <span class="muted small">updated <?= fc_e(fc_ago($carrier['outfitting_at'])) ?></span></h2>
       <?php if ($rows === []): ?>
-        <div class="empty">Nothing yet. Upload <code>Outfitting.json</code> while docked at the carrier.</div>
+        <?php fc_render_empty(
+            $carrier['outfitting_at'],
+            'No modules in stock.',
+            'Nothing yet. Upload <code>Outfitting.json</code> while docked at the carrier.',
+        ); ?>
       <?php else: ?>
-        <p class="muted small"><?= count($rows) ?> modules stocked.</p>
+        <p class="muted small"><?= count($rows) ?> module<?= count($rows) === 1 ? '' : 's' ?> stocked.</p>
         <div class="tablewrap">
           <table>
             <thead><tr><th>Module</th><th>Category</th><th class="num">Cost</th></tr></thead>

@@ -485,7 +485,8 @@ function fc_capi_apply_outfitting(int $id, array $data, string $ts): void
             continue;
         }
         $module = fc_clean_symbol($item['name'] ?? null);
-        if ($module === '') {
+        $cost = (int) ($item['cost'] ?? 0);
+        if ($module === '' || !fc_is_stocked_module($module, $cost)) {
             continue;
         }
         // Frontier's `category` here is the literal string "module" for every
@@ -504,7 +505,7 @@ function fc_capi_apply_outfitting(int $id, array $data, string $ts): void
             'module' => mb_substr($module, 0, 96),
             'loc' => fc_module_label($module),
             'cat' => $category,
-            'cost' => (int) ($item['cost'] ?? 0),
+            'cost' => $cost,
             'stock' => $stock < 0 ? 0 : $stock,
         ]);
     }
