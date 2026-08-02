@@ -15,29 +15,42 @@ function fc_like(string $search): string
 }
 
 if ($query !== '') {
+    // A search may turn up carriers nobody here owns — spotted in passing from
+    // someone's journal. They are worth finding by name, just not worth
+    // padding the front page with.
     $carriers = fc_all(
         'SELECT * FROM fc_carriers
-          WHERE is_public = 1
+          WHERE is_public = 1 AND callsign IS NOT NULL
             AND (name LIKE :q OR callsign LIKE :q2 OR system LIKE :q3)
-          ORDER BY updated_at DESC
+          ORDER BY owner_user_id IS NULL, updated_at DESC
           LIMIT 100',
         ['q' => fc_like($query), 'q2' => fc_like($query), 'q3' => fc_like($query)],
     );
 } else {
     $carriers = fc_all(
-        'SELECT * FROM fc_carriers WHERE is_public = 1 ORDER BY updated_at DESC LIMIT 50',
+        'SELECT * FROM fc_carriers
+          WHERE is_public = 1 AND owner_user_id IS NOT NULL
+          ORDER BY updated_at DESC LIMIT 50',
     );
 }
 
-$total = (int) (fc_one('SELECT COUNT(*) AS n FROM fc_carriers WHERE is_public = 1')['n'] ?? 0);
+$total = (int) (fc_one(
+    'SELECT COUNT(*) AS n FROM fc_carriers WHERE is_public = 1 AND owner_user_id IS NOT NULL'
+)['n'] ?? 0);
+$tracked = (int) (fc_one(
+    'SELECT COUNT(*) AS n FROM fc_carriers WHERE is_public = 1 AND owner_user_id IS NULL AND callsign IS NOT NULL'
+)['n'] ?? 0);
 
 fc_head('Carriers', 'search');
 ?>
 <main class="wrap">
   <h1>Carriers</h1>
   <p class="muted">
-    <?= fc_num($total) ?> listed. Owners choose whether their carrier appears here, and a carrier tracked only from
-    visitors' journals shows what it was last seen doing.
+    <?= fc_num($total) ?> claimed. Owners choose whether their carrier appears here.
+    <?php if ($tracked > 0): ?>
+      Another <?= fc_num($tracked) ?> <?= $tracked === 1 ? 'carrier has' : 'carriers have' ?> been spotted in passing
+      from uploaded journals — search by name or callsign to find those.
+    <?php endif; ?>
   </p>
 
   <div class="card">

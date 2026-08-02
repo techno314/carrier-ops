@@ -94,7 +94,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   color: var(--text);
 }
 .brand:hover { text-decoration: none; color: var(--text); }
-.brand svg { flex: none; display: block; border-radius: 6px; }
+.brand svg { flex: none; display: block; }
 
 .topbar nav { display: flex; gap: 4px; flex-wrap: wrap; }
 .topbar nav a {

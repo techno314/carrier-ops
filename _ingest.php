@@ -322,6 +322,15 @@ function fc_apply_event(array $event, array $user, array &$report): bool
             return false;
         }
     } else {
+        // A public event about a carrier we have never heard of is only worth
+        // a row if it names the thing. CarrierLocation gives an id, a system
+        // and nothing else -- and turns up for squadron carriers a commander
+        // merely flew past, which would fill the board with nameless entries.
+        // Updates to a carrier we already know still go through.
+        if (!$isOwnerEvent && !isset($event['StationName']) && fc_carrier($carrierId) === null) {
+            return false;
+        }
+
         $carrier = fc_carrier_for_write($carrierId, $user, $isOwnerEvent, $report);
         if ($carrier === null) {
             return false;

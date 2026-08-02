@@ -559,7 +559,7 @@ function fc_head(string $title, string $active = ''): void
  * favicon stays vector.
  */
 ?>
-<link rel="icon" type="image/svg+xml" href="<?= fc_e(fc_favicon()) ?>">
+<link rel="icon" type="image/svg+xml" href="/fc/assets/icon.svg?v=<?= fc_e(fc_asset_version('icon.svg')) ?>">
 <link rel="apple-touch-icon" href="/fc/assets/carrier-512.jpg?v=<?= fc_e(fc_asset_version('carrier-512.jpg')) ?>">
 <meta property="og:title" content="<?= fc_e($title) ?> · Carrier Ops">
 <meta property="og:description" content="Fleet carrier management for Elite Dangerous, read from your own game journals.">
@@ -571,7 +571,7 @@ function fc_head(string $title, string $active = ''): void
 <body>
 <header class="topbar">
   <a class="brand" href="<?= fc_e(fc_url()) ?>">
-    <?= fc_logo_svg(26, 'nav') ?>
+    <?= fc_logo_svg(34, 'nav', false) ?>
     <span>Carrier&nbsp;Ops</span>
   </a>
   <nav>
@@ -633,7 +633,14 @@ function fc_logo_svg(int $size = 32, string $idSuffix = 'brand', bool $plate = t
 {
     $gradient = 'fclogo-' . $idSuffix;
 
-    $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="' . $size . '" height="' . $size
+    // Without the plate, crop to the artwork so the carrier fills the space
+    // instead of floating in the padding the plate needs. The nav uses this:
+    // the plate colour is the panel colour, so there it was an invisible
+    // square with a tiny ship rattling around inside it.
+    $box = $plate ? '0 0 32 32' : '1.6 2.8 27.4 22.4';
+    $height = $plate ? $size : (int) round($size * 22.4 / 27.4);
+
+    $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' . $box . '" width="' . $size . '" height="' . $height
         . '" role="img" aria-label="Carrier Ops">'
         . '<defs><linearGradient id="' . $gradient . '" x1="0" y1="0" x2="0.7" y2="1">'
         . '<stop offset="0" stop-color="#ffc38a"/>'
@@ -657,13 +664,22 @@ function fc_logo_svg(int $size = 32, string $idSuffix = 'brand', bool $plate = t
     // Engine block at the stern, brighter so it reads as thrust.
     $svg .= '<path d="M2.1 19h2v3.6h-2z" fill="#ffd9b3"/>';
 
-    // Landing pads punched out of the deck.
-    $svg .= '<rect x="16.4" y="19.9" width="2.4" height="1.6" rx="0.5" fill="#12161d" opacity="0.55"/>'
-        . '<rect x="20" y="19.9" width="2.4" height="1.6" rx="0.5" fill="#12161d" opacity="0.55"/>';
+    // Landing pads punched out of the deck. Dark on the orange deck either
+    // way, so they work with or without the plate behind them.
+    $svg .= '<rect x="16.4" y="19.9" width="2.4" height="1.6" rx="0.5" fill="#12161d" opacity="0.6"/>'
+        . '<rect x="20" y="19.9" width="2.4" height="1.6" rx="0.5" fill="#12161d" opacity="0.6"/>';
 
     return $svg . '</svg>';
 }
 
+/**
+ * The favicon as a data URI.
+ *
+ * Not used for the `<link rel="icon">` any more: browsers cache a favicon
+ * hard, per origin, and a data URI has no URL to version, so a redrawn logo
+ * would sit behind the old one indefinitely. assets/icon.svg is served with a
+ * mtime query instead. Kept for anywhere an inline copy is genuinely wanted.
+ */
 function fc_favicon(): string
 {
     return 'data:image/svg+xml;base64,' . base64_encode(fc_logo_svg(32, 'icon'));
