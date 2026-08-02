@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/lib/core.php';
+require_once __DIR__ . '/lib/core.php';
 
 $user = fc_user();
 $zip = __DIR__ . '/assets/CarrierOps-edmc.zip';

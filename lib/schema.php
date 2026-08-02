@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 5;
+const FC_SCHEMA_VERSION = 6;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -383,6 +383,51 @@ function fc_schema_statements(): array
             created_at DATETIME NOT NULL,
             UNIQUE KEY fc_resets_token (token_hash),
             KEY fc_resets_user (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // A Discord webhook the owner has pointed at one of their carriers.
+        // board_message_id is the message the status board keeps editing; it is
+        // only ever obtained by posting with ?wait=true, since a plain webhook
+        // POST answers 204 with an empty body and no id to keep.
+        "CREATE TABLE IF NOT EXISTS fc_webhooks (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            carrier_id BIGINT UNSIGNED NOT NULL,
+            created_by INT UNSIGNED NULL,
+            label VARCHAR(64) NULL,
+            url VARCHAR(255) NOT NULL,
+            events VARCHAR(255) NOT NULL DEFAULT '',
+            show_finance TINYINT(1) NOT NULL DEFAULT 0,
+            board_enabled TINYINT(1) NOT NULL DEFAULT 0,
+            board_message_id VARCHAR(32) NULL,
+            board_hash CHAR(40) NULL,
+            enabled TINYINT(1) NOT NULL DEFAULT 1,
+            fail_count INT NOT NULL DEFAULT 0,
+            last_error VARCHAR(255) NULL,
+            last_sent_at DATETIME NULL,
+            created_at DATETIME NOT NULL,
+            KEY fc_webhooks_carrier (carrier_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Outbound posts wait here rather than going out inside the upload that
+        // produced them: Discord is somebody else's server and this host has
+        // five PHP workers for the whole domain, so a slow round trip must not
+        // be one the uploader is made to sit through.
+        //
+        // dedupe_hash is what stops a re-uploaded journal reposting a jump that
+        // was announced weeks ago -- the same protection fc_ledger needs, for
+        // the same reason.
+        "CREATE TABLE IF NOT EXISTS fc_webhook_queue (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            webhook_id INT UNSIGNED NOT NULL,
+            kind VARCHAR(32) NOT NULL,
+            payload MEDIUMTEXT NOT NULL,
+            dedupe_hash CHAR(40) NOT NULL,
+            attempts INT NOT NULL DEFAULT 0,
+            next_attempt_at DATETIME NOT NULL,
+            last_error VARCHAR(255) NULL,
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY fc_webhook_queue_dedupe (dedupe_hash),
+            KEY fc_webhook_queue_due (next_attempt_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         "CREATE TABLE IF NOT EXISTS fc_uploads (

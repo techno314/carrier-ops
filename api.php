@@ -14,9 +14,9 @@ declare(strict_types=1);
  * are calling it from a signed-in browser.
  */
 
-require __DIR__ . '/lib/core.php';
-require __DIR__ . '/lib/ingest.php';
-require __DIR__ . '/lib/render.php';
+require_once __DIR__ . '/lib/core.php';
+require_once __DIR__ . '/lib/ingest.php';
+require_once __DIR__ . '/lib/render.php';
 
 header('Cache-Control: no-store');
 

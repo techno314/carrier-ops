@@ -2,9 +2,10 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/lib/core.php';
-require __DIR__ . '/lib/render.php';
-require __DIR__ . '/lib/market.php';
+require_once __DIR__ . '/lib/core.php';
+require_once __DIR__ . '/lib/render.php';
+require_once __DIR__ . '/lib/market.php';
+require_once __DIR__ . '/lib/webhooks.php';
 
 $user = fc_user();
 
@@ -43,6 +44,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'motd' => mb_substr(trim((string) ($_POST['motd'] ?? '')), 0, 500) ?: null,
         ]);
         fc_flash('Carrier settings saved.');
+    } elseif (str_starts_with((string) ($_POST['action'] ?? ''), 'webhook_')) {
+        fc_handle_webhook_post((string) $_POST['action'], $carrier);
     } elseif (($_POST['action'] ?? '') === 'release') {
         // Hand the carrier back so a different account can claim it. The data
         // stays; only the ownership link is dropped.
@@ -716,6 +719,143 @@ case 'manage':
         </table>
       </div>
       <p class="small dim">Callsign and name come from the journal and cannot be edited here — change them in game and upload again.</p>
+    </div>
+
+    <?php
+    $hooks = fc_all('SELECT * FROM fc_webhooks WHERE carrier_id = :cid ORDER BY id', ['cid' => $carrier['id']]);
+    $kinds = fc_webhook_kinds();
+    ?>
+    <div class="card">
+      <h2>Discord</h2>
+      <p class="muted small">
+        Post this carrier's activity to a Discord channel. Create the webhook in Discord under
+        <em>Edit Channel → Integrations → Webhooks</em>, then paste its URL here. The URL is the only
+        credential involved, so treat it like a password — anyone holding it can post to that channel.
+      </p>
+
+      <?php foreach ($hooks as $hook):
+          $on = explode(',', (string) $hook['events']);
+          ?>
+        <form method="post" class="webhook">
+          <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+          <input type="hidden" name="webhook_id" value="<?= (int) $hook['id'] ?>">
+
+          <div class="webhook-head">
+            <div>
+              <strong><?= fc_e($hook['label'] ?? 'Webhook') ?></strong>
+              <div class="mono small muted"><?= fc_e(fc_webhook_mask((string) $hook['url'])) ?></div>
+            </div>
+            <div>
+              <?php if ((int) $hook['enabled'] === 1): ?>
+                <span class="badge on">Active</span>
+              <?php else: ?>
+                <span class="badge off">Off</span>
+              <?php endif; ?>
+            </div>
+          </div>
+
+          <?php if ($hook['last_error'] !== null): ?>
+            <div class="banner err small">
+              Last attempt failed: <?= fc_e($hook['last_error']) ?>
+              <?php if ((int) $hook['enabled'] !== 1): ?>
+                Fix it in Discord, then tick <em>Active</em> and save to try again.
+              <?php endif; ?>
+            </div>
+          <?php endif; ?>
+
+          <div class="field">
+            <label for="label<?= (int) $hook['id'] ?>">Name</label>
+            <input id="label<?= (int) $hook['id'] ?>" name="label" type="text" maxlength="64"
+                   value="<?= fc_e($hook['label'] ?? '') ?>" placeholder="Squadron channel">
+          </div>
+
+          <div class="checks">
+            <?php foreach ($kinds as $kind => $spec): ?>
+              <div class="check">
+                <input type="checkbox" id="k<?= (int) $hook['id'] ?><?= fc_e(str_replace('.', '', $kind)) ?>"
+                       name="events[]" value="<?= fc_e($kind) ?>" <?= in_array($kind, $on, true) ? 'checked' : '' ?>>
+                <label for="k<?= (int) $hook['id'] ?><?= fc_e(str_replace('.', '', $kind)) ?>">
+                  <?= fc_e($spec['label']) ?>
+                  <span class="dim small"><?= fc_e($spec['hint']) ?></span>
+                </label>
+              </div>
+            <?php endforeach; ?>
+          </div>
+
+          <div class="check">
+            <input type="checkbox" id="board<?= (int) $hook['id'] ?>" name="board_enabled" <?= (int) $hook['board_enabled'] === 1 ? 'checked' : '' ?>>
+            <label for="board<?= (int) $hook['id'] ?>">
+              Keep a status board in the channel
+              <span class="dim small">One message showing where the carrier is now, edited in place rather than
+                reposted. <?= $hook['board_message_id'] === null ? 'Not posted yet.' : 'Posted — pin it so it stays findable.' ?></span>
+            </label>
+          </div>
+          <div class="check">
+            <input type="checkbox" id="fin<?= (int) $hook['id'] ?>" name="show_finance" <?= (int) $hook['show_finance'] === 1 ? 'checked' : '' ?>>
+            <label for="fin<?= (int) $hook['id'] ?>">
+              Include the balance on the status board
+              <span class="dim small">Off by default. Anyone who can read the channel would see it.</span>
+            </label>
+          </div>
+          <div class="check">
+            <input type="checkbox" id="on<?= (int) $hook['id'] ?>" name="enabled" <?= (int) $hook['enabled'] === 1 ? 'checked' : '' ?>>
+            <label for="on<?= (int) $hook['id'] ?>">Active</label>
+          </div>
+
+          <div class="actions">
+            <button class="btn" type="submit" name="action" value="webhook_save">Save</button>
+            <button class="btn ghost" type="submit" name="action" value="webhook_test">Send a test</button>
+            <button class="btn danger ghost" type="submit" name="action" value="webhook_delete"
+                    onclick="return confirm('Remove this webhook? Messages already posted stay in the channel.')">Remove</button>
+          </div>
+          <?php if ($hook['last_sent_at'] !== null): ?>
+            <p class="small dim" style="margin-bottom:0">Last delivered <?= fc_e(fc_ago($hook['last_sent_at'])) ?>.</p>
+          <?php endif; ?>
+        </form>
+      <?php endforeach; ?>
+
+      <?php if (count($hooks) < 6): ?>
+        <form method="post" class="webhook">
+          <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+          <input type="hidden" name="action" value="webhook_add">
+
+          <div class="field">
+            <label for="newurl">Webhook URL</label>
+            <input id="newurl" name="url" type="url" required
+                   placeholder="https://discord.com/api/webhooks/…" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="newlabel">Name <span class="dim small">optional</span></label>
+            <input id="newlabel" name="label" type="text" maxlength="64" placeholder="Squadron channel">
+          </div>
+
+          <div class="checks">
+            <?php foreach ($kinds as $kind => $spec): ?>
+              <div class="check">
+                <input type="checkbox" id="new<?= fc_e(str_replace('.', '', $kind)) ?>"
+                       name="events[]" value="<?= fc_e($kind) ?>" <?= $spec['default'] ? 'checked' : '' ?>>
+                <label for="new<?= fc_e(str_replace('.', '', $kind)) ?>">
+                  <?= fc_e($spec['label']) ?>
+                  <span class="dim small"><?= fc_e($spec['hint']) ?></span>
+                </label>
+              </div>
+            <?php endforeach; ?>
+          </div>
+
+          <div class="check">
+            <input type="checkbox" id="newboard" name="board_enabled" checked>
+            <label for="newboard">Keep a status board in the channel</label>
+          </div>
+
+          <div class="actions"><button class="btn" type="submit">Add webhook</button></div>
+        </form>
+      <?php endif; ?>
+
+      <p class="small dim" style="margin-bottom:0">
+        Notices are queued and sent after your upload finishes, so nothing waits on Discord. Journals older than
+        six hours are ingested silently — uploading a backlog fills in the history here without announcing
+        journeys that ended weeks ago.
+      </p>
     </div>
 
     <div class="card">

@@ -12,8 +12,8 @@ declare(strict_types=1);
  * scripts for one linear flow made the root harder to read than the code.
  */
 
-require __DIR__ . '/lib/core.php';
-require __DIR__ . '/lib/mail.php';
+require_once __DIR__ . '/lib/core.php';
+require_once __DIR__ . '/lib/mail.php';
 
 /** Long enough to find the mail, short enough that a stolen one goes stale. */
 const FC_RESET_TTL_SECONDS = 3600;

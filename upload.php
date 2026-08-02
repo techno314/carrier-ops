@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-require __DIR__ . '/lib/core.php';
-require __DIR__ . '/lib/ingest.php';
-require __DIR__ . '/lib/render.php';
+require_once __DIR__ . '/lib/core.php';
+require_once __DIR__ . '/lib/ingest.php';
+require_once __DIR__ . '/lib/render.php';
 
 $user = fc_require_user();
 $result = null;
