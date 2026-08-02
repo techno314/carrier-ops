@@ -37,10 +37,28 @@ const FC_BUYERS_TTL_SECONDS = 6 * 3600;
  */
 const FC_BUYERS_ERROR_TTL_SECONDS = 600;
 
-/** Live fetches allowed per minute, across the whole site. */
-const FC_BUYERS_RATE_LIMIT = 8;
+/**
+ * Live fetches allowed per minute, across the whole site.
+ *
+ * This is a backstop, not the main defence. What actually bounds the load is
+ * that the cache keys are now finite: a commodity, one of three radii, and a
+ * demand bucket. One carrier's whole hold is at most a few dozen distinct
+ * questions, and after that everything is cached for six hours.
+ *
+ * Deliberately *not* implemented as a queue that spaces requests out. This
+ * host runs pm.max_children = 5 — five PHP workers for the entire site,
+ * including the URL shortener. Sleeping inside a request to pace an outbound
+ * call holds one of those five for the duration, so a handful of concurrent
+ * lookups would stall everything else on the domain. Rejecting a request
+ * costs the caller a message; queueing it costs every other visitor the site.
+ */
+const FC_BUYERS_RATE_LIMIT = 20;
 
-const FC_BUYERS_TIMEOUT = 20;
+/**
+ * Kept short for the same reason: a hung upstream must not sit on a worker.
+ * Ardent answers in about two seconds.
+ */
+const FC_BUYERS_TIMEOUT = 10;
 
 /** Beyond this a listing is old enough that the price is a guess. */
 const FC_PRICE_STALE_DAYS = 30;
@@ -213,7 +231,7 @@ function fc_ardent_imports(string $commodity, string $system, int $minDemand, in
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => FC_BUYERS_TIMEOUT,
-        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_HTTPHEADER => ['Accept: application/json'],
         // Ardent is run by a volunteer. Say who is calling.
         CURLOPT_USERAGENT => 'CarrierOps/1.0 (+' . fc_base_url() . '/fc/)',
