@@ -138,11 +138,15 @@ fc_head('Upload', 'upload');
   </div>
 
   <div class="card">
-    <h2>Automating it</h2>
+    <h2>Stop doing this by hand</h2>
     <p class="muted small">
-      An API key on your <a href="<?= fc_e(fc_url('settings.php')) ?>">settings page</a> lets a script post the same
-      data without signing in — point a file watcher at your journal folder and it stays current on its own.
+      The <a href="<?= fc_e(fc_url('plugin.php')) ?>">EDMC plugin</a> watches your journal and pushes carrier events
+      as they happen, including a one-press backfill of everything already on disk. Failing that, an API key on your
+      <a href="<?= fc_e(fc_url('settings.php')) ?>">settings page</a> lets any script post to the same endpoint.
     </p>
+    <div class="actions">
+      <a class="btn ghost sm" href="<?= fc_e(fc_url('plugin.php')) ?>">Get the plugin</a>
+    </div>
   </div>
 
   <?php if ($recent !== []): ?>

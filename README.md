@@ -62,6 +62,27 @@ they scanned, who they fought, what was said in chat — is parsed, ignored and 
   purchases
 - **Public carrier pages and search**, with per-carrier privacy switches. Finances are never public
 - **JSON API** for reading and for automated ingestion
+- **EDMC plugin** that pushes events as they happen, so nobody has to upload a file
+
+## Keeping it current
+
+Three ways in, in increasing order of laziness:
+
+1. **Drag journals onto `/fc/upload.php`.** Works with no setup at all.
+2. **POST to the API** with a key from the settings page.
+3. **Install the [EDMC plugin](edmc-plugin/CarrierOps/README.md)** (`/fc/plugin.php`), which watches the
+   journal and sends carrier events as the game writes them, and has a one-press backfill for
+   everything already on disk.
+
+Opening the **Carrier Management** screen in game writes a `CarrierStats` event carrying crew,
+finances, fuel, space usage and docking access in one go — it is the single most useful thing to
+trigger if the board looks stale.
+
+The downloadable plugin zip is built from the source folder:
+
+```powershell
+Compress-Archive -Path edmc-plugin\CarrierOps -DestinationPath assets\CarrierOps-edmc.zip -Force
+```
 
 ## Ownership
 
@@ -84,12 +105,21 @@ Configuration comes from the environment (the same variables the rest of the hos
 | `DB_PORT` | no | Defaults to 3306 |
 | `PUBLIC_BASE_URL` | no | Defaults to `https://grayflare.space` |
 | `FC_INVITE_CODE` | no | Set it and registration requires the code. Unset means open registration |
+| `FC_ADMIN_CODE` | no | Overrides the `.htadmin-code` file below |
 | `FC_DISCORD_LOGIN` | no | `1` enables the Discord sign-in button — see below |
 
 Tables are created on first request. A `.schema-version` sentinel next to the code keeps the check
 to one `stat()` per request rather than a database round trip; delete it to force a re-run.
 
-**The first account to register becomes the admin.**
+### Becoming an admin
+
+Admins can see and take over any carrier on the board, so the role is granted by proving you have
+access to the deployment, not by being the first to reach the registration form. Put a secret in
+`.htadmin-code` next to `_lib.php` and enter it on the settings page.
+
+The `.ht` prefix is load-bearing: nginx on this host denies any path containing `/\.ht`, so the file
+cannot be fetched over HTTP. A plain `.admin-code` would be served as a static file and hand the
+code to anyone who guessed the name. Delete the file to close promotion entirely.
 
 ### Discord sign-in
 
@@ -134,10 +164,13 @@ index.php       dashboard (signed in) or the pitch (signed out)
 carrier.php     carrier view, tabbed, plus owner controls
 search.php      public carrier list and search
 upload.php      drag-and-drop journal upload
-settings.php    profile, password, API key
+plugin.php      EDMC plugin download and install notes
+settings.php    profile, password, API key, admin promotion
 api.php         JSON API
 login.php  register.php  logout.php
 assets/style.css
+assets/CarrierOps-edmc.zip   built from edmc-plugin/
+edmc-plugin/CarrierOps/      the plugin source
 ```
 
 Files starting with `_` 404 if requested directly, matching the convention used by `/go`.

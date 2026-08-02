@@ -65,6 +65,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'id' => $user['id'],
         ]);
         $user = fc_one('SELECT * FROM fc_users WHERE id = :id', ['id' => $user['id']]) ?? $user;
+    } elseif ($action === 'promote') {
+        $code = fc_admin_code();
+        $sent = (string) ($_POST['admin_code'] ?? '');
+        if ($code === null) {
+            $error = 'Admin promotion is closed on this deployment.';
+        } elseif (!hash_equals($code, $sent)) {
+            $error = 'That admin code is not right.';
+        } else {
+            fc_exec('UPDATE fc_users SET is_admin = 1 WHERE id = :id', ['id' => $user['id']]);
+            fc_flash('You are now an admin.');
+            fc_redirect(fc_url('settings.php'));
+        }
     } elseif ($action === 'revokekey') {
         fc_exec('UPDATE fc_users SET api_key_hash = NULL WHERE id = :id', ['id' => $user['id']]);
         fc_flash('API key revoked.');
@@ -119,6 +131,7 @@ fc_head('Settings', 'settings');
     <p class="muted small">
       A key lets a script post journal data without signing in. It can upload and read your own carriers, nothing else.
       <?= $user['api_key_hash'] === null ? 'You do not have one.' : 'A key is active.' ?>
+      The <a href="<?= fc_e(fc_url('plugin.php')) ?>">EDMC plugin</a> uses one to keep the board current by itself.
     </p>
 
     <h3>Posting data</h3>
@@ -167,6 +180,30 @@ fc_head('Settings', 'settings');
       </div>
     <?php endif; ?>
   </div>
+
+  <?php if ((int) $user['is_admin'] !== 1 && fc_admin_code() !== null): ?>
+    <div class="card">
+      <h2>Admin</h2>
+      <p class="muted small">
+        The code is in <code>.htadmin-code</code> in the app directory on the server. Admins can view and take over
+        any carrier on the board, so it is deliberately not something you can claim just by signing up.
+      </p>
+      <form method="post">
+        <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+        <input type="hidden" name="action" value="promote">
+        <div class="field">
+          <label for="admin_code">Admin code</label>
+          <input id="admin_code" name="admin_code" type="password" autocomplete="off">
+        </div>
+        <div class="actions"><button class="btn ghost" type="submit">Become an admin</button></div>
+      </form>
+    </div>
+  <?php elseif ((int) $user['is_admin'] === 1): ?>
+    <div class="card">
+      <h2>Admin</h2>
+      <p class="muted small" style="margin-bottom:0">This account is an admin. It can see and manage every carrier on the board.</p>
+    </div>
+  <?php endif; ?>
 
   <div class="card">
     <h2>Password</h2>

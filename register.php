@@ -34,18 +34,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($email !== '' && fc_one('SELECT id FROM fc_users WHERE email = :e', ['e' => $email]) !== null) {
         $error = 'That email address is already registered.';
     } else {
-        // The first account to exist runs the place; everyone after is ordinary.
-        $first = fc_one('SELECT id FROM fc_users LIMIT 1') === null;
-
+        // Everyone registers as an ordinary user. Admin is granted by entering
+        // the code from .admin-code on the settings page — handing the role to
+        // whoever happens to sign up first would give a passer-by the ability
+        // to read and take over every carrier on the board.
         fc_exec(
             'INSERT INTO fc_users (username, email, password_hash, cmdr_name, is_admin, created_at)
-             VALUES (:u, :e, :p, :c, :admin, UTC_TIMESTAMP())',
+             VALUES (:u, :e, :p, :c, 0, UTC_TIMESTAMP())',
             [
                 'u' => $username,
                 'e' => $email === '' ? null : $email,
                 'p' => password_hash($password, PASSWORD_DEFAULT),
                 'c' => $cmdr === '' ? null : $cmdr,
-                'admin' => $first ? 1 : 0,
             ],
         );
         // Read the id straight away: MySQL resets its last-insert-id on every

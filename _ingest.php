@@ -255,24 +255,28 @@ function fc_apply_event(array $event, array $user, array &$report): bool
     if (($name === 'Docked' || $name === 'Location') && ($event['StationType'] ?? '') !== 'FleetCarrier') {
         return false;
     }
-    if ($isSnapshot && ($event['StationType'] ?? '') !== 'FleetCarrier') {
-        return false;
-    }
 
     $carrierId = fc_event_carrier_id($event);
     if ($carrierId === null) {
         return false;
     }
 
-    // A snapshot is only accepted from the owner: it is a big write, and a
-    // visitor's copy of somebody else's market is not ours to store.
-    $claim = $isOwnerEvent;
-    $carrier = fc_carrier_for_write($carrierId, $user, $claim, $report);
-    if ($carrier === null) {
-        return false;
-    }
-    if ($isSnapshot && !fc_owns($user, $carrier)) {
-        return false;
+    // Snapshots are matched by MarketID against a carrier that already exists
+    // and belongs to the uploader. StationType would be the obvious test, but
+    // only Market.json carries one -- Shipyard.json and Outfitting.json name
+    // the station and nothing else, so keying on it would silently throw away
+    // the owner's own shipyard while happily creating carrier rows for every
+    // ordinary starport they ever docked at.
+    if ($isSnapshot) {
+        $carrier = fc_carrier($carrierId);
+        if ($carrier === null || !fc_owns($user, $carrier)) {
+            return false;
+        }
+    } else {
+        $carrier = fc_carrier_for_write($carrierId, $user, $isOwnerEvent, $report);
+        if ($carrier === null) {
+            return false;
+        }
     }
 
     $applied = match ($name) {

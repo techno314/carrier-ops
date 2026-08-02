@@ -64,6 +64,32 @@ function fc_url(string $path = ''): string
  * exists the button would dead-end, so it stays hidden rather than broken —
  * which is the exact failure this app was written to avoid.
  */
+/**
+ * The code that grants admin, from `.htadmin-code` next to this file or from
+ * FC_ADMIN_CODE.
+ *
+ * Admin can read and take over any carrier on the board, so it is granted by
+ * proving filesystem access to the deployment rather than by being the first
+ * to reach the registration form. Delete the file to close the door.
+ *
+ * The `.ht` prefix is not decoration: nginx on this host denies any path
+ * containing `/\.ht`, so the file cannot be fetched over HTTP. A plain
+ * `.admin-code` would be served as a static file and hand the code out.
+ */
+function fc_admin_code(): ?string
+{
+    $env = fc_env('FC_ADMIN_CODE');
+    if ($env !== null) {
+        return $env;
+    }
+    $raw = @file_get_contents(__DIR__ . '/.htadmin-code');
+    if ($raw === false) {
+        return null;
+    }
+    $raw = trim($raw);
+    return $raw === '' ? null : $raw;
+}
+
 function fc_discord_enabled(): bool
 {
     return fc_env('FC_DISCORD_LOGIN') === '1'
