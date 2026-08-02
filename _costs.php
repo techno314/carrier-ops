@@ -109,12 +109,38 @@ function fc_service_label(string $role): string
 }
 
 /**
- * Weekly upkeep from a crew roster.
+ * Weekly upkeep from a crew roster, or from the game's own figures.
+ *
+ * If a Companion API payload has been through (see _capi.php) the carrier row
+ * holds `core_cost` and `services_cost` as the game charges them, and those
+ * replace the reconstruction entirely. The per-service breakdown is still
+ * derived from the roster, since CAPI gives only the two totals.
  *
  * @param array $crew rows with crew_role / activated / enabled
- * @return array{core:int,services:int,total:int,lines:array}
+ * @param ?array $carrier the carrier row, when the caller has one
+ * @return array{core:int,services:int,total:int,lines:array,exact:bool}
  */
-function fc_upkeep(array $crew): array
+function fc_upkeep(array $crew, ?array $carrier = null): array
+{
+    $upkeep = fc_upkeep_estimate($crew);
+
+    $core = $carrier['core_cost'] ?? null;
+    $services = $carrier['services_cost'] ?? null;
+    if ($core !== null && $services !== null) {
+        $upkeep['core'] = (int) $core;
+        $upkeep['services'] = (int) $services;
+        $upkeep['total'] = (int) $core + (int) $services;
+        $upkeep['exact'] = true;
+    }
+
+    return $upkeep;
+}
+
+/**
+ * @param array $crew rows with crew_role / activated / enabled
+ * @return array{core:int,services:int,total:int,lines:array,exact:bool}
+ */
+function fc_upkeep_estimate(array $crew): array
 {
     $services = 0;
     $lines = [];
@@ -151,6 +177,7 @@ function fc_upkeep(array $crew): array
         'services' => $services,
         'total' => FC_CORE_UPKEEP + $services,
         'lines' => $lines,
+        'exact' => false,
     ];
 }
 

@@ -41,9 +41,26 @@ Two things the Companion API has that the journal does not:
 - **The exact upkeep breakdown.** cAPI returns `finance.coreCost` and `servicesCost` ready-made.
   The journal only says which crew are aboard and whether each service is running, so
   [`_costs.php`](_costs.php) reconstructs the number from the published cost table. A suspended
-  service still costs its retainer; only selling it removes the charge. The UI labels this
-  *estimated* because it is.
-- **The carrier cargo manifest.** The market snapshot's stock figures stand in.
+  service still costs its retainer; only selling it removes the charge.
+- **The carrier cargo manifest.** Nothing in the journal reports a carrier's hold.
+
+Both are now available anyway, without any Frontier registration — see below.
+
+## Companion API, without registering with Frontier
+
+EDMarketConnector already holds an approved cAPI client id, already queries `/fleetcarrier`, and
+hands the payload to plugins through `capi_fleetcarrier`. The CarrierOps plugin forwards it here and
+[`_capi.php`](_capi.php) parses it. Upkeep then shows the game's own figures instead of the
+reconstruction, and the Cargo tab fills in.
+
+The alternative — registering at [user.frontierstore.net](https://user.frontierstore.net/) and
+running the PKCE flow ourselves — was rejected because cAPI refresh tokens expire **25 days** after
+a user authorises. Every owner would have to log back in to Frontier roughly monthly or their data
+would silently stop updating. That is a strong candidate for what actually goes wrong with
+fleetcarrier.space after login.
+
+A cAPI payload is recognised by having no `event` key, so the same ingest endpoint takes journals
+and `/fleetcarrier` responses without the caller saying which is which.
 
 Only carrier events are read. The rest of an uploaded journal — where the commander has been, what
 they scanned, who they fought, what was said in chat — is parsed, ignored and never stored.
@@ -159,6 +176,7 @@ _lib.php        config, database, sessions, CSRF, formatting, page chrome
 _schema.php     table definitions and the migration runner
 _costs.php      service cost table, upkeep and solvency maths
 _ingest.php     journal parsing and the per-event handlers
+_capi.php       Companion API /fleetcarrier parsing
 _render.php     shared page fragments
 index.php       dashboard (signed in) or the pitch (signed out)
 carrier.php     carrier view, tabbed, plus owner controls

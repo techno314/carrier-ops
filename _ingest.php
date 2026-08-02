@@ -33,6 +33,8 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
+require_once __DIR__ . '/_capi.php';
+
 /**
  * Events that only ever appear in the carrier owner's own journal. Seeing one
  * is what claims an unowned carrier, and they are refused for a carrier that
@@ -72,9 +74,14 @@ function fc_ingest_text(string $text, array $user, string $filename, string $sou
     }
 
     // A Market.json / Shipyard.json / Outfitting.json is a single pretty-printed
-    // object, so the line-by-line pass above finds nothing in it.
+    // object, so the line-by-line pass above finds nothing in it. Neither is a
+    // Companion API /fleetcarrier payload, which has no `event` key at all --
+    // that absence is how the two are told apart.
     if ($events === []) {
         $decoded = json_decode($text, true);
+        if (fc_is_capi_payload($decoded)) {
+            return fc_ingest_capi_report($decoded, $user, $filename, $source, strlen($text));
+        }
         if (is_array($decoded) && isset($decoded['event'])) {
             $events[] = $decoded;
         }
@@ -111,6 +118,44 @@ function fc_ingest_text(string $text, array $user, string $filename, string $sou
             'file' => mb_substr($filename, 0, 190),
             'bytes' => strlen($text),
             'seen' => $report['seen'],
+            'applied' => $report['applied'],
+            'carriers' => mb_substr(implode(', ', $report['carriers']), 0, 190),
+        ],
+    );
+
+    return $report;
+}
+
+/**
+ * Run a Companion API payload through the same reporting shape an upload of
+ * journal lines produces, so callers do not care which they were handed.
+ *
+ * @return array{seen:int,applied:int,carriers:array<int,string>,notes:string[]}
+ */
+function fc_ingest_capi_report(array $data, array $user, string $filename, string $source, int $bytes): array
+{
+    $result = fc_ingest_capi($data, $user);
+
+    $report = [
+        'seen' => 1,
+        'applied' => $result['applied'] ? 1 : 0,
+        'carriers' => [],
+        'notes' => $result['note'] === null ? [] : [$result['note']],
+    ];
+    if ($result['applied'] && $result['carrier_id'] !== null) {
+        $report['carriers'][$result['carrier_id']] = $result['callsign'] ?? (string) $result['carrier_id'];
+        fc_close_itinerary($result['carrier_id']);
+    }
+
+    fc_exec(
+        'INSERT INTO fc_uploads (user_id, source, filename, bytes, events_seen, events_applied, carriers_touched, ts)
+         VALUES (:uid, :src, :file, :bytes, :seen, :applied, :carriers, UTC_TIMESTAMP())',
+        [
+            'uid' => $user['id'],
+            'src' => $source,
+            'file' => mb_substr($filename, 0, 190),
+            'bytes' => $bytes,
+            'seen' => 1,
             'applied' => $report['applied'],
             'carriers' => mb_substr(implode(', ', $report['carriers']), 0, 190),
         ],
@@ -736,14 +781,17 @@ function fc_close_itinerary(int $carrierId): void
     );
 
     $count = count($stops);
-    for ($i = 0; $i < $count; $i++) {
-        $wanted = $i + 1 < $count ? $stops[$i + 1]['arrival_time'] : null;
-        if ($stops[$i]['departure_time'] === $wanted) {
+    for ($i = 0; $i + 1 < $count; $i++) {
+        // Only fill blanks. The Companion API supplies real departure times,
+        // which are minutes earlier than the next arrival and should not be
+        // rounded up to it; and the newest stop stays open unless something
+        // authoritative says the carrier has left.
+        if ($stops[$i]['departure_time'] !== null) {
             continue;
         }
         fc_exec(
             'UPDATE fc_itinerary SET departure_time = :dep WHERE id = :id',
-            ['dep' => $wanted, 'id' => $stops[$i]['id']],
+            ['dep' => $stops[$i + 1]['arrival_time'], 'id' => $stops[$i]['id']],
         );
     }
 }

@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 1;
+const FC_SCHEMA_VERSION = 2;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -58,6 +58,7 @@ function fc_migrate(): void
     foreach (fc_schema_statements() as $sql) {
         $db->exec($sql);
     }
+    fc_ensure_columns();
 
     // Record it in the database too, so a wiped sentinel does not hide which
     // version the live tables are actually at.
@@ -65,6 +66,57 @@ function fc_migrate(): void
         "INSERT INTO fc_meta (k, v) VALUES ('schema_version', '" . FC_SCHEMA_VERSION . "')
          ON DUPLICATE KEY UPDATE v = VALUES(v)"
     );
+}
+
+/**
+ * Add columns that later versions introduced.
+ *
+ * `CREATE TABLE IF NOT EXISTS` covers new tables but says nothing about new
+ * columns on old ones, and MySQL has no portable `ADD COLUMN IF NOT EXISTS`.
+ * Ask the catalogue what is already there instead of relying on the version
+ * number, so a half-applied migration still converges.
+ */
+function fc_ensure_columns(): void
+{
+    $wanted = [
+        'fc_carriers' => [
+            // From the Companion API, which reports what the game actually
+            // charges rather than what _costs.php reconstructs.
+            'state' => 'VARCHAR(32) NULL',
+            'theme' => 'VARCHAR(64) NULL',
+            'taxation' => 'INT NULL',
+            'core_cost' => 'BIGINT NULL',
+            'services_cost' => 'BIGINT NULL',
+            'jumps_cost' => 'BIGINT NULL',
+            'num_jumps' => 'INT NULL',
+            'total_distance_jumped' => 'DOUBLE NULL',
+            'capi_at' => 'DATETIME NULL',
+            'cargo_at' => 'DATETIME NULL',
+        ],
+    ];
+
+    $db = fc_db();
+    foreach ($wanted as $table => $columns) {
+        $existing = [];
+        $stmt = $db->prepare(
+            'SELECT COLUMN_NAME FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t'
+        );
+        $stmt->execute(['t' => $table]);
+        foreach ($stmt->fetchAll() as $row) {
+            $existing[strtolower((string) $row['COLUMN_NAME'])] = true;
+        }
+        if ($existing === []) {
+            continue;   // table not created yet; the CREATE above will have it
+        }
+
+        foreach ($columns as $column => $definition) {
+            if (isset($existing[strtolower($column)])) {
+                continue;
+            }
+            $db->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` {$definition}");
+        }
+    }
 }
 
 /** @return string[] */
@@ -257,6 +309,19 @@ function fc_schema_statements(): array
             cost BIGINT NOT NULL DEFAULT 0,
             stock INT NOT NULL DEFAULT 0,
             PRIMARY KEY (carrier_id, module)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Only the Companion API knows what is actually in the hold; the
+        // journal never reports a carrier's cargo. Stolen goods sit in their
+        // own row because the game tracks them as a separate stack.
+        "CREATE TABLE IF NOT EXISTS fc_cargo (
+            carrier_id BIGINT UNSIGNED NOT NULL,
+            commodity VARCHAR(64) NOT NULL,
+            stolen TINYINT(1) NOT NULL DEFAULT 0,
+            loc_name VARCHAR(96) NULL,
+            qty INT NOT NULL DEFAULT 0,
+            value BIGINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (carrier_id, commodity, stolen)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         "CREATE TABLE IF NOT EXISTS fc_uploads (

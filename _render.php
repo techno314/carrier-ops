@@ -194,7 +194,7 @@ function fc_render_space_breakdown(array $carrier): void
  */
 function fc_render_upkeep(array $carrier, array $crew): void
 {
-    $upkeep = fc_upkeep($crew);
+    $upkeep = fc_upkeep($crew, $carrier);
     $lastTick = fc_last_upkeep_tick();
     $jumps = (int) (fc_one(
         'SELECT COUNT(*) AS n FROM fc_itinerary WHERE carrier_id = :id AND arrival_time >= :since',
@@ -205,7 +205,13 @@ function fc_render_upkeep(array $carrier, array $crew): void
     $solvency = fc_solvency($upkeep, $balance, $jumps);
     ?>
     <div class="card">
-      <h2>Upkeep <span class="badge">estimated</span></h2>
+      <h2>Upkeep
+        <?php if ($upkeep['exact']): ?>
+          <span class="badge on">from the game</span>
+        <?php else: ?>
+          <span class="badge">estimated</span>
+        <?php endif; ?>
+      </h2>
 
       <div class="stats" style="margin-bottom:16px">
         <div class="stat">
@@ -285,9 +291,16 @@ function fc_render_upkeep(array $carrier, array $crew): void
       <?php endif; ?>
 
       <p class="small dim" style="margin-bottom:0">
-        The journal records which crew are aboard and whether each service is running, but not what the game charges for
-        them, so upkeep is reconstructed from the published cost table. A suspended service still costs its retainer;
-        only selling it removes the charge entirely.
+        <?php if ($upkeep['exact']): ?>
+          The core and services totals are the game's own figures, by way of the Companion API. The per-service
+          breakdown above is still derived from the published cost table, since only the two totals come back.
+          A suspended service still costs its retainer; only selling it removes the charge entirely.
+        <?php else: ?>
+          The journal records which crew are aboard and whether each service is running, but not what the game charges
+          for them, so upkeep is reconstructed from the published cost table. A suspended service still costs its
+          retainer; only selling it removes the charge entirely.
+          <a href="<?= fc_e(fc_url('plugin.php')) ?>">The EDMC plugin</a> can supply the exact figures.
+        <?php endif; ?>
       </p>
     </div>
     <?php

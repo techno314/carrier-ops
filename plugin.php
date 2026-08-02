@@ -8,6 +8,12 @@ $user = fc_user();
 $zip = __DIR__ . '/assets/CarrierOps-edmc.zip';
 $size = @filesize($zip);
 
+// Cloudflare caches the zip by URL, and a rebuilt plugin under the same name
+// would keep being served from the edge. Version the link by mtime so a new
+// build is a new URL.
+$mtime = @filemtime($zip);
+$href = '/fc/assets/CarrierOps-edmc.zip' . ($mtime === false ? '' : '?v=' . $mtime);
+
 fc_head('EDMC plugin', 'upload');
 ?>
 <main class="wrap mid">
@@ -21,7 +27,7 @@ fc_head('EDMC plugin', 'upload');
   <div class="card">
     <h2>Download</h2>
     <div class="actions" style="margin-top:0">
-      <a class="btn" href="/fc/assets/CarrierOps-edmc.zip" download>
+      <a class="btn" href="<?= fc_e($href) ?>" download="CarrierOps-edmc.zip">
         CarrierOps-edmc.zip<?= $size === false ? '' : ' · ' . number_format($size / 1024, 1) . ' KB' ?>
       </a>
     </div>
@@ -46,6 +52,23 @@ fc_head('EDMC plugin', 'upload');
         <a class="btn ghost" href="<?= fc_e(fc_url('login.php')) ?>">Sign in to get an API key</a>
       </div>
     <?php endif; ?>
+  </div>
+
+  <div class="card">
+    <h2>Exact upkeep and the cargo hold</h2>
+    <p class="muted small">
+      Two things are not in the journal at all: what the game actually charges for upkeep, and what is in the
+      carrier's hold. Both come from Frontier's Companion API — and EDMC already holds an approved client id for it.
+    </p>
+    <p class="muted small">
+      Tick <strong>Enable Fleet Carrier CAPI Queries</strong> in EDMC's <em>Configuration</em> tab. The plugin
+      forwards each payload, the upkeep panel switches from <em>estimated</em> to the game's own figures, and a
+      Cargo tab appears.
+    </p>
+    <p class="small dim" style="margin-bottom:0">
+      Needs nothing from Frontier. You <em>can</em> register your own Companion API client, but its refresh tokens
+      expire 25 days after you authorise — going through EDMC has no such expiry.
+    </p>
   </div>
 
   <div class="card">

@@ -515,7 +515,9 @@ function fc_can_view(?array $user, array $carrier, string $tab): bool
     return match ($tab) {
         'market', 'shipyard', 'outfitting' => (int) $carrier['show_market'] === 1,
         'itinerary' => (int) $carrier['show_itinerary'] === 1,
-        'finance' => false,   // never public — it is the owner's bank balance
+        // Never public. The market is what the owner chose to advertise; the
+        // hold and the bank balance are nobody else's business.
+        'finance', 'cargo' => false,
         default => true,
     };
 }

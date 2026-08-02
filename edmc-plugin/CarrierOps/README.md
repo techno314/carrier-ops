@@ -36,6 +36,25 @@ Opening the **Carrier Management** screen in game writes a `CarrierStats` event,
 finances, fuel, space usage and docking access all at once. It is the single most useful thing to
 trigger if the board looks out of date.
 
+## Exact upkeep and the cargo hold
+
+Two things are simply not in the journal: what the game actually charges for upkeep, and what is in
+the carrier's hold. Both are in Frontier's Companion API — and EDMC already holds an approved client
+id and queries it for you.
+
+Tick **Enable Fleet Carrier CAPI Queries** in EDMC's *Configuration* tab. The plugin then forwards
+each `/fleetcarrier` payload EDMC receives, and the board's upkeep panel switches from *estimated*
+to the game's own figures, with a Cargo tab alongside.
+
+EDMC asks Frontier at most every 15 minutes, and only after events like `CarrierStats`,
+`CarrierLocation` or `CargoTransfer`, so this supplements the journal feed rather than replacing it.
+The plugin's settings tab reports whether the option is currently on.
+
+This needs nothing from Frontier. Registering your own Companion API client is possible — apply at
+[user.frontierstore.net](https://user.frontierstore.net/) — but its refresh tokens expire 25 days
+after authorising, so every user would have to log in again roughly monthly. Going through EDMC has
+no such expiry.
+
 ## What it sends
 
 Only fleet carrier events, listed explicitly in `CARRIER_EVENTS` at the top of `load.py`. Every

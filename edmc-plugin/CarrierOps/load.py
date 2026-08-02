@@ -383,6 +383,19 @@ def plugin_prefs(parent: nb.Notebook, cmdr: str, is_beta: bool) -> Optional[tk.F
         justify=tk.LEFT,
     ).grid(row=row, column=0, columnspan=3, padx=10, pady=(0, 8), sticky=tk.W)
 
+    # EDMC's own Companion API fleet carrier query is what feeds
+    # capi_fleetcarrier(). Report it rather than switching it on behind their
+    # back -- it is EDMC's setting, not ours.
+    row += 1
+    if config.get_bool("capi_fleetcarrier", default=False):
+        capi_note = ("Companion API: on. Exact upkeep and the cargo hold will be sent "
+                     "when EDMC queries Frontier.")
+    else:
+        capi_note = ("Companion API: off. Tick 'Enable Fleet Carrier CAPI Queries' in EDMC's\n"
+                     "Configuration tab to also send exact upkeep and the cargo hold.")
+    nb.Label(frame, text=capi_note, justify=tk.LEFT) \
+        .grid(row=row, column=0, columnspan=3, padx=10, pady=(4, 8), sticky=tk.W)
+
     row += 1
     ttk.Button(frame, text="Test connection", command=_test_connection) \
         .grid(row=row, column=0, padx=10, pady=4, sticky=tk.W)
@@ -445,6 +458,35 @@ def journal_entry(
         ops.enqueue_file(os.path.join(journal_dir(), filename))
 
     return None
+
+
+def capi_fleetcarrier(data) -> None:
+    """
+    Frontier's own `/fleetcarrier` payload, by way of EDMC.
+
+    EDMC holds an approved Companion API client id and queries this endpoint
+    itself, then hands the result to plugins. That is worth forwarding, because
+    it carries the two things the journal simply does not have: what the game
+    actually charges for upkeep, and what is in the carrier's hold.
+
+    It is not a replacement for the journal path -- EDMC only asks Frontier at
+    most every 15 minutes, and only when you have ticked the fleet carrier CAPI
+    option in its settings.
+    """
+    if not ops.configured:
+        return
+
+    try:
+        # CAPIData is a dict subclass, but it carries extra attributes that do
+        # not survive json.dumps; take a plain copy first.
+        body = json.dumps(dict(data), separators=(",", ":"))
+    except (TypeError, ValueError) as err:
+        logger.warning("Could not serialise the fleetcarrier payload: %s", err)
+        return
+
+    ops.remember_carrier(dict(data).get("market") or {})
+    ops.queue.put(("fleetcarrier.json", body))
+    logger.debug("Queued a Companion API fleetcarrier payload (%s bytes)", len(body))
 
 
 # -- buttons ----------------------------------------------------------------

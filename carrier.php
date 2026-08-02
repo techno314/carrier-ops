@@ -59,6 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $tabs = [
     'overview' => 'Overview',
+    'cargo' => 'Cargo',
     'market' => 'Market',
     'orders' => 'Orders',
     'itinerary' => 'Itinerary',
@@ -69,6 +70,9 @@ $tabs = [
 if ($owns) {
     $tabs['finance'] = 'Finance';
     $tabs['manage'] = 'Manage';
+} else {
+    // Owner-only wherever they sit in the ordering above.
+    unset($tabs['cargo']);
 }
 
 $tab = (string) ($_GET['tab'] ?? 'overview');
@@ -113,6 +117,56 @@ case 'overview':
         fc_render_taxes($carrier);
     }
     echo '</div>';
+    break;
+
+// ---------------------------------------------------------------------------
+case 'cargo':
+    $rows = fc_all(
+        'SELECT * FROM fc_cargo WHERE carrier_id = :id ORDER BY stolen, qty DESC',
+        ['id' => $carrier['id']],
+    );
+    $tonnes = array_sum(array_map(static fn(array $r) => (int) $r['qty'], $rows));
+    $worth = array_sum(array_map(static fn(array $r) => (int) $r['qty'] * (int) $r['value'], $rows));
+    ?>
+    <div class="card">
+      <h2>Cargo hold <span class="muted small">updated <?= fc_e(fc_ago($carrier['cargo_at'])) ?></span></h2>
+      <?php if ($rows === []): ?>
+        <div class="empty">
+          The journal never reports what is in a carrier's hold — only the Companion API does.
+          <a href="<?= fc_e(fc_url('plugin.php')) ?>">The EDMC plugin</a> can fetch it.
+        </div>
+      <?php else: ?>
+        <div class="stats" style="margin-bottom:16px">
+          <div class="stat">
+            <div class="k">Tonnes held</div>
+            <div class="v"><?= fc_num($tonnes) ?> <span class="muted small">t</span></div>
+          </div>
+          <div class="stat">
+            <div class="k">Estimated worth</div>
+            <div class="v"><?= fc_cr($worth) ?> <span class="muted small">cr</span></div>
+          </div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Commodity</th><th class="num">Quantity</th><th class="num">Unit value</th><th class="num">Total</th></tr></thead>
+            <tbody>
+            <?php foreach ($rows as $row): ?>
+              <tr>
+                <td>
+                  <?= fc_e($row['loc_name'] ?: ucfirst($row['commodity'])) ?>
+                  <?php if ((int) $row['stolen'] === 1): ?><span class="badge bad">Stolen</span><?php endif; ?>
+                </td>
+                <td class="num"><?= fc_num((int) $row['qty']) ?> t</td>
+                <td class="num"><?= fc_cr((int) $row['value']) ?></td>
+                <td class="num"><?= fc_cr((int) $row['qty'] * (int) $row['value']) ?></td>
+              </tr>
+            <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </div>
+    <?php
     break;
 
 // ---------------------------------------------------------------------------

@@ -78,7 +78,7 @@ function fc_api_carrier(array $carrier, bool $owns): array
 
     if ($owns) {
         $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $carrier['id']]);
-        $upkeep = fc_upkeep($crew);
+        $upkeep = fc_upkeep($crew, $carrier);
         $lastTick = fc_last_upkeep_tick();
         $jumps = (int) (fc_one(
             'SELECT COUNT(*) AS n FROM fc_itinerary WHERE carrier_id = :id AND arrival_time >= :since',
@@ -108,9 +108,19 @@ function fc_api_carrier(array $carrier, bool $owns): array
             'weeksSolvent' => $solvency['weeks'],
             'solventFor' => fc_weeks_span($solvency['weeks']),
             'nextChargeAt' => gmdate('c', fc_next_upkeep_tick()),
-            'estimated' => true,
+            // False once a Companion API payload has supplied the game's own
+            // coreCost and servicesCost; the per-service lines stay derived.
+            'estimated' => !$upkeep['exact'],
             'lines' => $upkeep['lines'],
         ];
+        $out['cargo'] = array_map(static fn(array $c) => [
+            'commodity' => $c['commodity'],
+            'name' => $c['loc_name'],
+            'qty' => (int) $c['qty'],
+            'value' => (int) $c['value'],
+            'stolen' => (bool) $c['stolen'],
+        ], fc_all('SELECT * FROM fc_cargo WHERE carrier_id = :id ORDER BY qty DESC', ['id' => $carrier['id']]));
+
         $out['crew'] = array_map(static fn(array $m) => [
             'role' => $m['crew_role'],
             'service' => fc_service_label((string) $m['crew_role']),
