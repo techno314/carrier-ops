@@ -88,3 +88,8 @@ Dock at it and open Carrier Management.
 
 EDMC's log (**File → Settings → Configuration → Open Log Folder**) has the detail; the plugin logs
 under `EDMarketConnector.CarrierOps`.
+
+## Licence
+
+BSD-3-Clause, copyright 2026 snoog. Contains no EDMarketConnector code; it uses EDMC's documented
+plugin entry points. See `NOTICE.md` in the parent project.

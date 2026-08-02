@@ -17,9 +17,10 @@ carrier, market, cargo, itinerary, modules, ships.
 **What was not taken:** any of its source. FCMS is Python on Pyramid and SQLAlchemy; this is PHP
 with no framework, no ORM and no shared files. Nothing here is a translation of anything there.
 
-Facts about a JSON response are not copyrightable, so this notice is not a legal obligation so much
-as an accurate account of where the knowledge came from. FCMS is BSD-3-Clause, and its terms are
-reproduced in full below.
+Facts about a JSON response are not copyrightable, and neither is the idea of a website that shows
+you your fleet carrier. Copyright covers expression, not function. So this notice is less a legal
+obligation than an accurate account of where the knowledge came from. FCMS is BSD-3-Clause, and its
+terms are reproduced in full below. This project is under the same licence.
 
 Per clause 3: **The Fuel Rats have not endorsed this software and are not associated with it.** Any
 resemblance in purpose is because both read the same game's data; do not read it as approval.
@@ -73,7 +74,8 @@ under "Finding somewhere to sell" in the README.
 
 The plugin in `edmc-plugin/` is loaded by EDMC and uses its documented plugin entry points
 (`plugin_start3`, `journal_entry`, `capi_fleetcarrier` and so on). It contains no EDMC code. EDMC is
-GPL-2.0, copyright its contributors.
+GPL-2.0, copyright its contributors; BSD-3-Clause is GPL-compatible, so a GPL host loading this
+plugin raises no conflict however strictly the boundary is drawn.
 
 The Companion API data this app can receive is fetched by EDMC under EDMC's own Frontier client
 registration, at the user's explicit request, and forwarded by the plugin.

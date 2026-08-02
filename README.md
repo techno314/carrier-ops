@@ -224,4 +224,6 @@ See [NOTICE.md](NOTICE.md) in full. In short:
   `edmc-plugin/` through its documented entry points, and is what fetches Companion API data under
   its own Frontier registration.
 
+This project is **BSD-3-Clause** — see [LICENSE](LICENSE).
+
 Not affiliated with Frontier Developments. Elite Dangerous is copyright Frontier Developments plc.
