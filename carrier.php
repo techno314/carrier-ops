@@ -195,7 +195,7 @@ case 'cargo':
 
         $qty = (int) $stack['qty'];
         $label = $stack['loc_name'] ?: ucfirst((string) $stack['commodity']);
-        $range = max(50, min(5000, (int) ($_GET['ly'] ?? 1000)));
+        $range = fc_search_range($_GET['ly'] ?? 1000);
 
         if ($carrier['system'] === null) {
             echo '<div class="card"><div class="empty">The carrier has no known position to search from.</div></div>';
@@ -265,7 +265,7 @@ case 'cargo':
             </p>
 
             <div class="actions">
-              <?php foreach ([500, 1000, 2000] as $option): ?>
+              <?php foreach (FC_SEARCH_RANGES as $option): ?>
                 <?php if ($option !== $range): ?>
                   <a class="btn ghost sm" href="<?= fc_e(fc_carrier_link($carrier)) ?>&amp;tab=cargo&amp;find=<?= fc_e(rawurlencode((string) $stack['commodity'])) ?>&amp;ly=<?= $option ?>">Within <?= fc_num($option) ?> ly</a>
                 <?php endif; ?>

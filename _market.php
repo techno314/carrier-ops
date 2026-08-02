@@ -46,6 +46,29 @@ const FC_BUYERS_TIMEOUT = 20;
 const FC_PRICE_STALE_DAYS = 30;
 
 /**
+ * The only search radii on offer.
+ *
+ * The range is part of the cache key, so accepting any number between 50 and
+ * 5000 would mean five thousand distinct cache keys per commodity — five
+ * thousand cold lookups, from URLs anyone signed in could walk through. The
+ * page only ever offers three, so only three are accepted.
+ */
+const FC_SEARCH_RANGES = [500, 1000, 2000];
+
+/** Snap a requested radius to the nearest offered one. */
+function fc_search_range(mixed $requested): int
+{
+    $wanted = is_numeric($requested) ? (int) $requested : 1000;
+    $best = FC_SEARCH_RANGES[0];
+    foreach (FC_SEARCH_RANGES as $range) {
+        if (abs($range - $wanted) < abs($best - $wanted)) {
+            $best = $range;
+        }
+    }
+    return $best;
+}
+
+/**
  * Stations near a system that want a commodity, best price first.
  *
  * Fleet carriers are excluded. Their owners set arbitrary prices — the first
