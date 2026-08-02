@@ -98,6 +98,10 @@ function fc_ingest_text(string $text, array $user, string $filename, string $sou
         }
     }
 
+    foreach (array_keys($report['carriers']) as $carrierId) {
+        fc_close_itinerary((int) $carrierId);
+    }
+
     fc_exec(
         'INSERT INTO fc_uploads (user_id, source, filename, bytes, events_seen, events_applied, carriers_touched, ts)
          VALUES (:uid, :src, :file, :bytes, :seen, :applied, :carriers, UTC_TIMESTAMP())',
@@ -637,13 +641,29 @@ function fc_ev_jump_cancelled(array $carrier, array $event, ?string $ts): bool
 
 function fc_ev_location(array $carrier, array $event, ?string $ts, string $eventName): bool
 {
-    if (fc_stale($carrier, 'location_at', $ts)) {
-        return false;
-    }
     $id = (int) $carrier['id'];
     $system = $event['StarSystem'] ?? ($event['SystemName'] ?? null);
     if ($system === null) {
         return false;
+    }
+
+    // History accumulates whatever order it arrives in. A jump from two years
+    // ago is still a real arrival even though it must not move the carrier's
+    // current position -- which is exactly what a backfill is full of, and
+    // guarding this behind the staleness check threw all of it away.
+    if ($eventName === 'CarrierJump' && $ts !== null) {
+        fc_record_arrival($id, (string) $system, $event, $ts);
+        fc_exec(
+            "UPDATE fc_jumps SET status = 'completed'
+              WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time <= :ts",
+            ['cid' => $id, 'ts' => $ts],
+        );
+    }
+
+    if (fc_stale($carrier, 'location_at', $ts)) {
+        // Something newer already says where the carrier is. Still counts as
+        // applied if it contributed an arrival.
+        return $eventName === 'CarrierJump';
     }
 
     $fields = [
@@ -665,16 +685,6 @@ function fc_ev_location(array $carrier, array $event, ?string $ts, string $event
     }
 
     fc_update_carrier($id, $fields);
-
-    if ($eventName === 'CarrierJump' && $ts !== null) {
-        fc_record_arrival($id, (string) $system, $event, $ts);
-        fc_exec(
-            "UPDATE fc_jumps SET status = 'completed'
-              WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time <= :ts",
-            ['cid' => $id, 'ts' => $ts],
-        );
-    }
-
     return true;
 }
 
@@ -705,6 +715,37 @@ function fc_record_arrival(int $carrierId, string $system, array $event, string 
             'ts' => $ts,
         ],
     );
+}
+
+/**
+ * Make each stop's departure the next stop's arrival, leaving only the latest
+ * one open.
+ *
+ * The journal never records a carrier leaving, so a departure is only ever
+ * inferred from the next arrival. Doing that as events stream in works while
+ * they arrive in order, but a backfill inserts arrivals *behind* ones already
+ * stored, which would otherwise leave a trail of stops the carrier apparently
+ * never left. Cheap to just re-derive the whole column afterwards.
+ */
+function fc_close_itinerary(int $carrierId): void
+{
+    $stops = fc_all(
+        'SELECT id, arrival_time, departure_time FROM fc_itinerary
+          WHERE carrier_id = :id ORDER BY arrival_time ASC',
+        ['id' => $carrierId],
+    );
+
+    $count = count($stops);
+    for ($i = 0; $i < $count; $i++) {
+        $wanted = $i + 1 < $count ? $stops[$i + 1]['arrival_time'] : null;
+        if ($stops[$i]['departure_time'] === $wanted) {
+            continue;
+        }
+        fc_exec(
+            'UPDATE fc_itinerary SET departure_time = :dep WHERE id = :id',
+            ['dep' => $wanted, 'id' => $stops[$i]['id']],
+        );
+    }
 }
 
 function fc_ev_decommission(array $carrier, array $event, ?string $ts, bool $pending): bool
