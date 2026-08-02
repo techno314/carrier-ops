@@ -222,6 +222,40 @@ case 'cargo':
               </div>
             <?php endif; ?>
 
+            <?php
+            // The game's own valuation of the stack sits alongside the best
+            // listed price, because the two answer different questions and
+            // people reasonably expect them to agree.
+            $listed = (int) $stack['value'];
+            $best = $buyers['rows'][0];
+            $atBest = min($qty, $best['demand']) * $best['sellPrice'];
+            ?>
+            <div class="stats" style="margin-bottom:16px">
+              <div class="stat">
+                <div class="k">Valued in game at</div>
+                <div class="v"><?= fc_cr($listed) ?> <span class="muted small">cr</span></div>
+                <div class="muted small" style="margin-top:6px">
+                  <?= $qty > 0 && $listed > 0 ? fc_cr((int) round($listed / $qty)) . ' /t' : '—' ?>
+                </div>
+              </div>
+              <div class="stat">
+                <div class="k">At the best listed price</div>
+                <div class="v"><?= fc_cr($atBest) ?> <span class="muted small">cr</span></div>
+                <div class="muted small" style="margin-top:6px"><?= fc_cr($best['sellPrice']) ?> /t at <?= fc_e($best['station']) ?></div>
+              </div>
+              <?php if ($listed > 0): ?>
+                <div class="stat">
+                  <div class="k">Difference</div>
+                  <div class="v" style="color:<?= $atBest >= $listed ? 'var(--ok)' : 'var(--danger)' ?>">
+                    <?= ($atBest >= $listed ? '+' : '') . fc_cr($atBest - $listed) ?>
+                  </div>
+                  <div class="muted small" style="margin-top:6px">
+                    <?= sprintf('%+.1f%%', ($atBest / $listed - 1) * 100) ?> over the in-game valuation
+                  </div>
+                </div>
+              <?php endif; ?>
+            </div>
+
             <div class="tablewrap">
               <table>
                 <thead>
@@ -256,9 +290,12 @@ case 'cargo':
             </div>
 
             <p class="small dim" style="margin-bottom:0">
-              Market data from <a href="https://ardent-insight.com/" rel="noopener">Ardent</a>, cached for six hours.
-              Fleet carriers are excluded — their owners set arbitrary prices and they move. "Your stack" is what
-              the buyer would pay for as much of your <?= fc_num($qty) ?> t as they will actually take.
+              "Your stack" is the listed price times as much of your <?= fc_num($qty) ?> t as the buyer will take.
+              Treat it as a ceiling rather than a quote: a commodity market's price falls as you sell into it, so
+              unloading <?= fc_num($qty) ?> t will not hold the top price all the way down. The in-game valuation
+              beside it is closer to the galactic average, which is why the two disagree.
+              Market data from <a href="https://ardent-insight.com/" rel="noopener">Ardent</a>, cached for six hours;
+              fleet carriers excluded, since their owners set arbitrary prices and they move.
               <?php if ($buyers['fetched_at'] !== null): ?>
                 Looked up <?= fc_e(fc_ago($buyers['fetched_at'])) ?>.
               <?php endif; ?>
