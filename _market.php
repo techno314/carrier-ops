@@ -28,6 +28,18 @@ const FC_ARDENT_BASE = 'https://api.ardent-insight.com/v2';
 /** Long enough to be polite, short enough that a price is still worth acting on. */
 const FC_BUYERS_TTL_SECONDS = 6 * 3600;
 
+/**
+ * A failed lookup is remembered too, briefly.
+ *
+ * Without this, an outage at the far end turns into a request per page view
+ * for as long as it lasts — precisely when the other server can least afford
+ * it.
+ */
+const FC_BUYERS_ERROR_TTL_SECONDS = 600;
+
+/** Live fetches allowed per minute, across the whole site. */
+const FC_BUYERS_RATE_LIMIT = 8;
+
 const FC_BUYERS_TIMEOUT = 20;
 
 /** Beyond this a listing is old enough that the price is a guess. */
@@ -45,7 +57,7 @@ const FC_PRICE_STALE_DAYS = 30;
  */
 function fc_find_buyers(string $commodity, string $system, int $minDemand, int $maxDistance = 1000): array
 {
-    $result = fc_ardent_imports($commodity, $system, $minDemand, $maxDistance);
+    $result = fc_ardent_imports($commodity, $system, fc_demand_bucket($minDemand), $maxDistance);
 
     // Asking for more demand than anyone has is a common way to get nothing
     // back. Rather than an empty page, drop the demand floor and say so.
@@ -61,6 +73,59 @@ function fc_find_buyers(string $commodity, string $system, int $minDemand, int $
 }
 
 /**
+ * Round a stack size down to two significant figures.
+ *
+ * The demand floor is part of the cache key, and a hold changes constantly —
+ * selling forty tonnes of tritium would otherwise turn 16,690 into 16,650 and
+ * miss the cache entirely, making every Companion API update cost a fresh
+ * lookup. Bucketing to 16,000 holds still.
+ *
+ * Rounding *down* matters: the answer stays a superset of what was asked for,
+ * so nothing that qualifies is lost, and the demand column still shows who
+ * will genuinely take the lot.
+ */
+function fc_demand_bucket(int $demand): int
+{
+    if ($demand <= 100) {
+        return 0;
+    }
+    $magnitude = 10 ** max(1, (int) floor(log10($demand)) - 1);
+    return (int) (floor($demand / $magnitude) * $magnitude);
+}
+
+/**
+ * Whether another live call is allowed right now.
+ *
+ * Caching stops the same question being asked twice, but says nothing about a
+ * burst of *different* questions — eleven commodities across three ranges is
+ * thirty-three cold lookups from one impatient session. This caps the whole
+ * site rather than one visitor, since it is the far end being protected.
+ */
+function fc_ardent_may_fetch(): bool
+{
+    $row = fc_one("SELECT v FROM fc_meta WHERE k = 'ardent_fetches'");
+    $stamps = $row === null ? [] : (json_decode((string) $row['v'], true) ?: []);
+
+    $cutoff = time() - 60;
+    $stamps = array_values(array_filter(
+        array_map('intval', is_array($stamps) ? $stamps : []),
+        static fn(int $t) => $t > $cutoff,
+    ));
+
+    if (count($stamps) >= FC_BUYERS_RATE_LIMIT) {
+        return false;
+    }
+
+    $stamps[] = time();
+    fc_exec(
+        "INSERT INTO fc_meta (k, v) VALUES ('ardent_fetches', :v)
+         ON DUPLICATE KEY UPDATE v = VALUES(v)",
+        ['v' => mb_substr(json_encode($stamps), 0, 255)],
+    );
+    return true;
+}
+
+/**
  * @return array{rows:array,fetched_at:?string,error:?string,relaxed:bool}
  */
 function fc_ardent_imports(string $commodity, string $system, int $minDemand, int $maxDistance): array
@@ -69,14 +134,46 @@ function fc_ardent_imports(string $commodity, string $system, int $minDemand, in
     $hash = sha1(implode('|', [$commodity, strtolower($system), $minDemand, $maxDistance]));
 
     $cached = fc_one('SELECT * FROM fc_buyers WHERE query_hash = :h', ['h' => $hash]);
-    if ($cached !== null
-        && strtotime((string) $cached['fetched_at'] . ' UTC') > time() - FC_BUYERS_TTL_SECONDS
-    ) {
-        $rows = json_decode((string) $cached['payload'], true);
+    $age = $cached === null ? null : time() - (int) strtotime((string) $cached['fetched_at'] . ' UTC');
+
+    if ($cached !== null && $age !== null) {
+        // A null payload is a remembered failure, held for a shorter while.
+        $ttl = $cached['payload'] === null ? FC_BUYERS_ERROR_TTL_SECONDS : FC_BUYERS_TTL_SECONDS;
+        if ($age < $ttl) {
+            if ($cached['payload'] === null) {
+                return [
+                    'rows' => [],
+                    'fetched_at' => null,
+                    'error' => 'The market data service was unreachable a moment ago. Try again shortly.',
+                    'relaxed' => false,
+                ];
+            }
+            $rows = json_decode((string) $cached['payload'], true);
+            return [
+                'rows' => is_array($rows) ? $rows : [],
+                'fetched_at' => $cached['fetched_at'],
+                'error' => null,
+                'relaxed' => false,
+            ];
+        }
+    }
+
+    if (!fc_ardent_may_fetch()) {
+        // Over the burst limit. Anything stale beats hammering someone else's
+        // server, and beats an error page.
+        if ($cached !== null && $cached['payload'] !== null) {
+            $rows = json_decode((string) $cached['payload'], true);
+            return [
+                'rows' => is_array($rows) ? $rows : [],
+                'fetched_at' => $cached['fetched_at'],
+                'error' => null,
+                'relaxed' => false,
+            ];
+        }
         return [
-            'rows' => is_array($rows) ? $rows : [],
-            'fetched_at' => $cached['fetched_at'],
-            'error' => null,
+            'rows' => [],
+            'fetched_at' => null,
+            'error' => 'Too many market lookups at once. Give it a minute.',
             'relaxed' => false,
         ];
     }
@@ -115,6 +212,19 @@ function fc_ardent_imports(string $commodity, string $system, int $minDemand, in
             ];
         }
         error_log("fc: Ardent lookup failed ({$status}) {$curlError} for {$url}");
+
+        // Remember the failure so an outage costs one request every ten
+        // minutes rather than one per page view.
+        fc_exec(
+            'INSERT INTO fc_buyers (query_hash, commodity, system, min_demand, max_distance, payload, fetched_at)
+             VALUES (:h, :c, :s, :d, :dist, NULL, UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE payload = NULL, fetched_at = VALUES(fetched_at)',
+            [
+                'h' => $hash, 'c' => mb_substr($commodity, 0, 64), 's' => mb_substr($system, 0, 128),
+                'd' => $minDemand, 'dist' => $maxDistance,
+            ],
+        );
+
         return [
             'rows' => [],
             'fetched_at' => null,
