@@ -106,6 +106,7 @@ function fc_ingest_text(string $text, array $user, string $filename, string $sou
     }
 
     foreach (array_keys($report['carriers']) as $carrierId) {
+        fc_fill_itinerary_bodies((int) $carrierId);
         fc_close_itinerary((int) $carrierId);
     }
 
@@ -144,6 +145,7 @@ function fc_ingest_capi_report(array $data, array $user, string $filename, strin
     ];
     if ($result['applied'] && $result['carrier_id'] !== null) {
         $report['carriers'][$result['carrier_id']] = $result['callsign'] ?? (string) $result['carrier_id'];
+        fc_fill_itinerary_bodies($result['carrier_id']);
         fc_close_itinerary($result['carrier_id']);
     }
 
@@ -864,6 +866,52 @@ function fc_record_arrival(int $carrierId, string $system, array $event, string 
           WHERE carrier_id = :cid AND departure_time IS NULL AND arrival_time < :ts2 AND id <> :id',
         ['ts' => $ts, 'cid' => $carrierId, 'ts2' => $ts, 'id' => $id],
     );
+}
+
+/**
+ * Name the body on arrivals that arrived without one.
+ *
+ * Only CarrierJump carries a body name, and it is written solely when the
+ * commander is aboard. A jump made while they were elsewhere reaches us either
+ * as a bodiless CarrierLocation or through the Companion API's itinerary,
+ * which never names bodies at all.
+ *
+ * CarrierJumpRequest does name it, though, and its DepartureTime is the moment
+ * the carrier arrives -- the two are the same instant, not fifteen minutes
+ * apart. So a scheduled jump to the right system at the right time supplies
+ * the name nothing else recorded.
+ */
+function fc_fill_itinerary_bodies(int $carrierId): int
+{
+    $blank = fc_all(
+        "SELECT id, system, arrival_time FROM fc_itinerary
+          WHERE carrier_id = :id AND (body IS NULL OR body = '')",
+        ['id' => $carrierId],
+    );
+
+    $filled = 0;
+    foreach ($blank as $stop) {
+        $jump = fc_one(
+            "SELECT body FROM fc_jumps
+              WHERE carrier_id = :cid AND system = :sys
+                AND body IS NOT NULL AND body <> ''
+                AND ABS(TIMESTAMPDIFF(SECOND, departure_time, :ts)) <= :window
+              ORDER BY ABS(TIMESTAMPDIFF(SECOND, departure_time, :ts2)) ASC
+              LIMIT 1",
+            [
+                'cid' => $carrierId, 'sys' => $stop['system'], 'ts' => $stop['arrival_time'],
+                'ts2' => $stop['arrival_time'], 'window' => FC_ARRIVAL_MERGE_SECONDS,
+            ],
+        );
+        if ($jump === null) {
+            continue;
+        }
+        fc_exec('UPDATE fc_itinerary SET body = :body WHERE id = :id',
+            ['body' => $jump['body'], 'id' => $stop['id']]);
+        $filled++;
+    }
+
+    return $filled;
 }
 
 /**
