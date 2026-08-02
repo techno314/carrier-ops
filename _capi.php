@@ -441,17 +441,16 @@ function fc_capi_apply_itinerary(int $id, array $data): void
         if ($arrival === null || $system === null) {
             continue;
         }
-        fc_exec(
-            'INSERT INTO fc_itinerary (carrier_id, system, arrival_time, departure_time)
-             VALUES (:cid, :sys, :arr, :dep)
-             ON DUPLICATE KEY UPDATE system = VALUES(system),
-                                     departure_time = COALESCE(VALUES(departure_time), departure_time)',
-            [
-                'cid' => $id,
-                'sys' => mb_substr((string) $system, 0, 128),
-                'arr' => $arrival,
-                'dep' => fc_ts($stop['departureTime'] ?? null),
-            ],
+        // Frontier timestamps an arrival a few seconds off from where the
+        // journal put it, and names no body. Merging rather than inserting is
+        // what stops every jump appearing twice, once with a body and once
+        // without.
+        fc_merge_arrival(
+            $id,
+            mb_substr((string) $system, 0, 128),
+            null,
+            $arrival,
+            fc_ts($stop['departureTime'] ?? null),
         );
     }
 }

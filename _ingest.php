@@ -742,32 +742,127 @@ function fc_ev_location(array $carrier, array $event, ?string $ts, string $event
     return true;
 }
 
-/** Close off the previous stop and open a new one. */
-function fc_record_arrival(int $carrierId, string $system, array $event, string $ts): void
-{
-    fc_exec(
-        'UPDATE fc_itinerary SET departure_time = :ts
-          WHERE carrier_id = :cid AND departure_time IS NULL AND arrival_time < :ts2',
-        ['ts' => $ts, 'cid' => $carrierId, 'ts2' => $ts],
+/**
+ * How far apart two records of the same arrival can be and still be the same
+ * arrival.
+ *
+ * The journal timestamps a jump when the client sees it land; the Companion
+ * API reports Frontier's own arrivalTime. They differ by seconds. A carrier
+ * cannot genuinely arrive in the same system twice inside ten minutes — even a
+ * body-to-body hop needs fifteen minutes of preparation and a five minute
+ * cooldown — so anything closer than this is one arrival seen twice.
+ */
+const FC_ARRIVAL_MERGE_SECONDS = 600;
+
+/**
+ * Record an arrival, folding it into an existing one if we already have it
+ * from the other source.
+ *
+ * Neither source is complete on its own: the journal knows the body and the
+ * co-ordinates, the Companion API knows the real departure time. Whichever
+ * arrives second fills in what the first was missing rather than adding a
+ * second row.
+ *
+ * @return int the id of the row this arrival lives in
+ */
+function fc_merge_arrival(
+    int $carrierId,
+    string $system,
+    ?string $body,
+    string $arrival,
+    ?string $departure = null,
+    ?int $systemAddress = null,
+    ?float $x = null,
+    ?float $y = null,
+    ?float $z = null,
+): int {
+    $existing = fc_one(
+        'SELECT * FROM fc_itinerary
+          WHERE carrier_id = :cid AND system = :sys
+            AND ABS(TIMESTAMPDIFF(SECOND, arrival_time, :ts)) <= :window
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, arrival_time, :ts2)) ASC
+          LIMIT 1',
+        [
+            'cid' => $carrierId, 'sys' => $system, 'ts' => $arrival,
+            'ts2' => $arrival, 'window' => FC_ARRIVAL_MERGE_SECONDS,
+        ],
     );
 
+    if ($existing !== null) {
+        // Only ever add detail; never blank out something already known.
+        $fields = [];
+        if ($body !== null && ($existing['body'] === null || $existing['body'] === '')) {
+            $fields['body'] = $body;
+        }
+        if ($departure !== null && $existing['departure_time'] === null) {
+            $fields['departure_time'] = $departure;
+        }
+        if ($systemAddress !== null && $existing['system_address'] === null) {
+            $fields['system_address'] = $systemAddress;
+        }
+        if ($x !== null && $existing['x'] === null) {
+            $fields['x'] = $x;
+            $fields['y'] = $y;
+            $fields['z'] = $z;
+        }
+
+        if ($fields !== []) {
+            $sets = [];
+            $params = ['id' => $existing['id']];
+            foreach ($fields as $column => $value) {
+                $sets[] = "`{$column}` = :{$column}";
+                $params[$column] = $value;
+            }
+            fc_exec('UPDATE fc_itinerary SET ' . implode(', ', $sets) . ' WHERE id = :id', $params);
+        }
+
+        return (int) $existing['id'];
+    }
+
+    fc_exec(
+        'INSERT INTO fc_itinerary (carrier_id, system, body, system_address, x, y, z, arrival_time, departure_time)
+         VALUES (:cid, :sys, :body, :addr, :x, :y, :z, :ts, :dep)
+         ON DUPLICATE KEY UPDATE system = VALUES(system),
+                                 body = COALESCE(VALUES(body), body),
+                                 departure_time = COALESCE(departure_time, VALUES(departure_time))',
+        [
+            'cid' => $carrierId, 'sys' => $system, 'body' => $body,
+            'addr' => $systemAddress, 'x' => $x, 'y' => $y, 'z' => $z,
+            'ts' => $arrival, 'dep' => $departure,
+        ],
+    );
+
+    $row = fc_one(
+        'SELECT id FROM fc_itinerary WHERE carrier_id = :cid AND arrival_time = :ts',
+        ['cid' => $carrierId, 'ts' => $arrival],
+    );
+    return (int) ($row['id'] ?? 0);
+}
+
+/** Record a journal arrival and close off whatever stop preceded it. */
+function fc_record_arrival(int $carrierId, string $system, array $event, string $ts): void
+{
     $x = $y = $z = null;
     if (isset($event['StarPos']) && is_array($event['StarPos']) && count($event['StarPos']) === 3) {
         [$x, $y, $z] = array_map('floatval', $event['StarPos']);
     }
 
+    $id = fc_merge_arrival(
+        $carrierId,
+        $system,
+        $event['Body'] ?? null,
+        $ts,
+        null,
+        isset($event['SystemAddress']) ? (int) $event['SystemAddress'] : null,
+        $x, $y, $z,
+    );
+
+    // Close earlier stops after the merge, so this arrival is not mistaken for
+    // one of them and given a departure time of its own.
     fc_exec(
-        'INSERT INTO fc_itinerary (carrier_id, system, body, system_address, x, y, z, arrival_time)
-         VALUES (:cid, :sys, :body, :addr, :x, :y, :z, :ts)
-         ON DUPLICATE KEY UPDATE system = VALUES(system), body = VALUES(body)',
-        [
-            'cid' => $carrierId,
-            'sys' => $system,
-            'body' => $event['Body'] ?? null,
-            'addr' => isset($event['SystemAddress']) ? (int) $event['SystemAddress'] : null,
-            'x' => $x, 'y' => $y, 'z' => $z,
-            'ts' => $ts,
-        ],
+        'UPDATE fc_itinerary SET departure_time = :ts
+          WHERE carrier_id = :cid AND departure_time IS NULL AND arrival_time < :ts2 AND id <> :id',
+        ['ts' => $ts, 'cid' => $carrierId, 'ts2' => $ts, 'id' => $id],
     );
 }
 
@@ -784,7 +879,7 @@ function fc_record_arrival(int $carrierId, string $system, array $event, string 
 function fc_close_itinerary(int $carrierId): void
 {
     $stops = fc_all(
-        'SELECT id, arrival_time, departure_time FROM fc_itinerary
+        'SELECT id, system, arrival_time, departure_time FROM fc_itinerary
           WHERE carrier_id = :id ORDER BY arrival_time ASC',
         ['id' => $carrierId],
     );
@@ -793,8 +888,7 @@ function fc_close_itinerary(int $carrierId): void
     for ($i = 0; $i + 1 < $count; $i++) {
         // Only fill blanks. The Companion API supplies real departure times,
         // which are minutes earlier than the next arrival and should not be
-        // rounded up to it; and the newest stop stays open unless something
-        // authoritative says the carrier has left.
+        // rounded up to it.
         if ($stops[$i]['departure_time'] !== null) {
             continue;
         }
@@ -802,6 +896,24 @@ function fc_close_itinerary(int $carrierId): void
             'UPDATE fc_itinerary SET departure_time = :dep WHERE id = :id',
             ['dep' => $stops[$i + 1]['arrival_time'], 'id' => $stops[$i]['id']],
         );
+    }
+
+    // The newest stop is open if the carrier is still in that system, and we
+    // know where the carrier is independently. Without this the last stop can
+    // keep a departure it inherited from a duplicate row that has since been
+    // folded into it, leaving a carrier that has demonstrably gone nowhere
+    // showing no current location at all.
+    if ($count === 0) {
+        return;
+    }
+    $newest = $stops[$count - 1];
+    $carrier = fc_carrier($carrierId);
+    if ($carrier !== null
+        && $carrier['system'] !== null
+        && $carrier['system'] === $newest['system']
+        && $newest['departure_time'] !== null
+    ) {
+        fc_exec('UPDATE fc_itinerary SET departure_time = NULL WHERE id = :id', ['id' => $newest['id']]);
     }
 }
 
