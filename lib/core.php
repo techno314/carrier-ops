@@ -397,6 +397,8 @@ function fc_maintenance_page(array $state): never
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php /* Stays noindex now the rest of the board is not: this is a temporary
+         state, and the one page that must never be what a search turns up. */ ?>
 <meta name="robots" content="noindex, nofollow">
 <title>Down for maintenance · Carrier Ops</title>
 <link rel="icon" type="image/svg+xml" href="/fc/assets/icon.svg">
@@ -419,7 +421,7 @@ function fc_maintenance_page(array $state): never
   </div>
 </main>
 <footer class="foot">
-  <span>Carrier Ops · unlisted</span>
+  <span>Carrier Ops</span>
 </footer>
 </body>
 </html>
@@ -1105,12 +1107,21 @@ function fc_dashboard_carriers(array $user): array
 // ---------------------------------------------------------------------------
 
 /**
- * Every page is noindex. The site is deliberately unlisted: it is not linked
- * from the landing page and should not turn up in a search.
+ * Page chrome.
+ *
+ * These pages are indexable. They were not while the board was unlisted during
+ * development; what a crawler now finds is what a signed-out visitor finds,
+ * which is the landing page, the public carrier list, and the public parts of
+ * whichever carriers their owners chose to publish. Everything behind
+ * fc_can_view stays behind it -- being indexable changes what is advertised,
+ * not what is readable.
+ *
+ * Two things stay noindex for reasons of their own: the maintenance holding
+ * page, which is a temporary state nobody should find in a search result, and
+ * fc_json, because an API response is not a page.
  */
 function fc_head(string $title, string $active = ''): void
 {
-    header('X-Robots-Tag: noindex, nofollow, noarchive, nosnippet');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
@@ -1127,7 +1138,6 @@ function fc_head(string $title, string $active = ''): void
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="robots" content="noindex, nofollow">
 <title><?= fc_e($title) ?> · Carrier Ops</title>
 <?php
 /*
@@ -1248,7 +1258,7 @@ function fc_foot(): void
 {
     ?>
 <footer class="foot">
-  <span>Carrier Ops · unlisted</span>
+  <span>Carrier Ops</span>
   <span class="muted">Data comes from your own Elite Dangerous journals. Not affiliated with Frontier Developments.</span>
 </footer>
 </body>

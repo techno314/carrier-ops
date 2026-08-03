@@ -4,7 +4,7 @@ A fleet carrier management board for Elite Dangerous: finances and upkeep, the c
 cargo, jump schedule, crew, shipyard and outfitting — read from the journal files the game already
 writes on your own machine.
 
-Live at `https://grayflare.space/fc/` — unlisted, and served `noindex, nofollow`.
+Live at `https://grayflare.space/fc/`.
 
 ## Where the data comes from
 
