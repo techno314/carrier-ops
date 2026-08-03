@@ -552,8 +552,103 @@ function fc_capi_apply_outfitting(int $id, array $data, string $ts): void
  * The journal only ever tells us about arrivals, so departures there are
  * inferred from the next one. These are the game's own figures, so they win.
  */
+/**
+ * A jump that is plotted but has not happened yet.
+ *
+ * Without this the Companion API could never report a pending jump: only
+ * `completed` was ever read, so a jump plotted while the game was running
+ * reached the board through a journal `CarrierJumpRequest` or not at all --
+ * and if journals were not being uploaded, the board said "no jump plotted"
+ * while the carrier was visibly counting down.
+ *
+ * Frontier's shape for this is not documented and the field is null except in
+ * the window between plotting and arriving, so several plausible spellings are
+ * tried and the raw structure is logged the first time a real one is seen.
+ * Guessing in the dark is worth doing once; guessing forever is not.
+ */
+function fc_capi_apply_pending_jump(int $id, array $data): void
+{
+    $jump = $data['itinerary']['currentJump'] ?? ($data['nextJump'] ?? null);
+
+    if (!is_array($jump) || $jump === []) {
+        // Nothing pending. The Companion API describes the carrier as it is
+        // right now, so a jump still marked scheduled has been called off --
+        // and without this, adding a pending jump but never clearing one meant
+        // a cancelled jump sat on the board until it aged past its own
+        // departure time and was quietly recorded as completed instead.
+        //
+        // The grace period is for the other order of events: a journal upload
+        // can record a jump request seconds before Frontier's own view catches
+        // up, and cancelling it on that basis would undo a jump that really
+        // had just been plotted.
+        fc_exec(
+            "UPDATE fc_jumps SET status = 'cancelled'
+              WHERE carrier_id = :cid
+                AND status = 'scheduled'
+                AND departure_time > UTC_TIMESTAMP()
+                AND created_at < (UTC_TIMESTAMP() - INTERVAL 2 MINUTE)",
+            ['cid' => $id],
+        );
+        return;
+    }
+
+    // Recorded once so the next person does not have to guess as well.
+    static $logged = false;
+    if (!$logged) {
+        $logged = true;
+        error_log('fc: capi currentJump shape: ' . json_encode($jump, JSON_UNESCAPED_SLASHES));
+    }
+
+    $pick = static function (array $node, array $keys): ?string {
+        foreach ($keys as $key) {
+            $value = $node[$key] ?? null;
+            if (is_array($value)) {
+                $value = $value['name'] ?? ($value['starsystem'] ?? null);
+            }
+            if (is_string($value) && trim($value) !== '') {
+                return trim($value);
+            }
+        }
+        return null;
+    };
+
+    $system = $pick($jump, ['starsystem', 'starSystem', 'system', 'destination', 'name']);
+    $body = $pick($jump, ['body', 'bodyName']);
+    // The Companion API calls this a departure time, as the journal does, and
+    // means the same thing by it: the moment the carrier arrives.
+    $arrival = fc_ts($jump['departureTime'] ?? ($jump['arrivalTime'] ?? null));
+
+    if ($system === null || $arrival === null) {
+        return;
+    }
+
+    fc_exec(
+        'INSERT INTO fc_jumps (carrier_id, system, body, departure_time, status, created_at)
+         VALUES (:cid, :sys, :body, :dep, :status, UTC_TIMESTAMP())
+         ON DUPLICATE KEY UPDATE system = VALUES(system),
+                                 body = COALESCE(VALUES(body), body),
+                                 status = VALUES(status)',
+        [
+            'cid' => $id,
+            'sys' => mb_substr($system, 0, 128),
+            'body' => $body === null ? null : mb_substr($body, 0, 128),
+            'dep' => $arrival,
+            'status' => 'scheduled',
+        ],
+    );
+}
+
 function fc_capi_apply_itinerary(int $id, array $data): void
 {
+    fc_capi_apply_pending_jump($id, $data);
+
+    // A jump that has landed is no longer pending, whatever we last recorded.
+    fc_exec(
+        "UPDATE fc_jumps SET status = 'completed'
+          WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time < UTC_TIMESTAMP()",
+        ['cid' => $id],
+    );
+
     $completed = $data['itinerary']['completed'] ?? null;
     if (!is_array($completed)) {
         return;

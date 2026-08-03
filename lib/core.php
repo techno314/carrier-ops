@@ -273,8 +273,20 @@ function fc_maintenance_guard(): void
 
     // Asking who this is needs the database, which may be the very thing being
     // repaired. If it cannot answer, nobody is an admin and everybody waits.
+    //
+    // An API key counts as identification here, not just a session cookie. The
+    // EDMC plugin has no session, so a session-only test made maintenance stop
+    // it uploading -- silently, since nothing on the plugin's side says why the
+    // board has gone quiet. An admin's key gets the same pass their browser
+    // does, and the game carries on feeding the board while the site is shut.
     try {
         $user = fc_user();
+        if ($user === null) {
+            $key = trim((string) ($_SERVER['HTTP_X_API_KEY'] ?? ''));
+            if ($key !== '') {
+                $user = fc_user_by_api_key($key);
+            }
+        }
     } catch (Throwable $e) {
         $user = null;
     }
