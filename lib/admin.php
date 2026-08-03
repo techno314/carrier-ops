@@ -32,6 +32,25 @@ require_once __DIR__ . '/render.php';   // fc_carrier_link, fc_carrier_display_n
  */
 function fc_handle_admin_post(string $action, array $admin): void
 {
+    // Maintenance acts on the site rather than on an account, so it is handled
+    // before the target lookup below.
+    if ($action === 'admin_maintenance_on') {
+        $message = trim((string) ($_POST['message'] ?? ''));
+        if (fc_maintenance_set($message === '' ? 'The board is down for maintenance. It will be back shortly.' : mb_substr($message, 0, 500))) {
+            fc_flash('Maintenance mode is on. Admins are unaffected; everyone else sees a closed sign.');
+        } else {
+            fc_flash('Could not write the maintenance file. Check that the app directory is writable.', 'err');
+        }
+        return;
+    }
+    if ($action === 'admin_maintenance_off') {
+        fc_flash(fc_maintenance_set(null)
+            ? 'Maintenance mode is off. The board is open.'
+            : 'Could not remove the maintenance file. Delete .htmaintenance on the server.',
+            fc_maintenance() === null ? 'ok' : 'err');
+        return;
+    }
+
     $targetId = (int) ($_POST['user_id'] ?? 0);
     if ($targetId === 0) {
         return;
@@ -110,18 +129,29 @@ function fc_handle_admin_post(string $action, array $admin): void
 
 function fc_render_admin(array $admin): void
 {
+    // GROUP_CONCAT wants a quoted separator, and this query is a single-quoted
+    // PHP string, so the two would fight: an unescaped quote closes the string
+    // and the rest of the SQL is silently passed as the parameter array. The
+    // ids are joined in PHP instead, where the question does not arise.
     $users = fc_all(
         'SELECT u.*,
                 (SELECT COUNT(*) FROM fc_carriers c WHERE c.owner_user_id = u.id) AS carriers,
                 (SELECT COUNT(*) FROM fc_uploads p WHERE p.user_id = u.id) AS uploads,
                 (SELECT MAX(p.ts) FROM fc_uploads p WHERE p.user_id = u.id) AS last_upload,
                 (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id) AS links,
-                (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id AND k.needs_reauth = 1) AS links_stale,
-                (SELECT GROUP_CONCAT(k.customer_id ORDER BY k.id SEPARATOR ', ')
-                   FROM fc_capi_tokens k WHERE k.user_id = u.id) AS customer_ids
+                (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id AND k.needs_reauth = 1) AS links_stale
            FROM fc_users u
           ORDER BY u.created_at DESC',
     );
+
+    foreach ($users as &$row) {
+        $ids = fc_all(
+            'SELECT customer_id FROM fc_capi_tokens WHERE user_id = :u ORDER BY id',
+            ['u' => $row['id']],
+        );
+        $row['customer_ids'] = implode(', ', array_filter(array_column($ids, 'customer_id')));
+    }
+    unset($row);
 
     $carriers = fc_all(
         'SELECT c.*, u.username AS owner
@@ -147,6 +177,52 @@ function fc_render_admin(array $admin): void
         <div class="stat"><div class="k">Accounts</div><div class="v"><?= count($users) ?></div></div>
         <div class="stat"><div class="k">Admins</div><div class="v"><?= $admins ?></div></div>
         <div class="stat"><div class="k">Carriers</div><div class="v"><?= count($carriers) ?></div></div>
+      </div>
+
+      <?php $maintenance = fc_maintenance(); ?>
+      <div class="card">
+        <h2>Maintenance mode
+          <?= $maintenance === null ? '<span class="badge on">Open</span>' : '<span class="badge bad">Closed</span>' ?>
+        </h2>
+        <p class="muted small">
+          While it is on, everyone but an admin gets a 503 and a closed sign. The scheduled jobs keep running —
+          journals already uploaded still process, and Frontier tokens still renew, so a long maintenance does not
+          quietly cost anyone their link.
+        </p>
+
+        <?php if ($maintenance === null): ?>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+            <div class="field">
+              <label for="mmsg">Message <span class="dim">(optional)</span></label>
+              <input id="mmsg" name="message" type="text" maxlength="500"
+                     placeholder="Back in about an hour — upgrading the database.">
+            </div>
+            <div class="actions">
+              <button class="btn danger" type="submit" name="action" value="admin_maintenance_on"
+                      onclick="return confirm('Close the board to everyone except admins?')">Turn on</button>
+            </div>
+          </form>
+        <?php else: ?>
+          <div class="banner warn">
+            <?= nl2br(fc_e($maintenance['message'])) ?>
+            <?php if ($maintenance['since'] !== null): ?>
+              <div class="small" style="margin-top:6px">On since <?= fc_e(gmdate('Y-m-d H:i', $maintenance['since'])) ?> UTC.</div>
+            <?php endif; ?>
+          </div>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+            <div class="actions">
+              <button class="btn" type="submit" name="action" value="admin_maintenance_off">Turn off</button>
+            </div>
+          </form>
+        <?php endif; ?>
+
+        <p class="small dim" style="margin-bottom:0">
+          Locked out? Signing in stays reachable at <code>account.php?do=login</code> the whole time, which is how
+          an admin who was signed out when it started gets back in. Failing that, delete
+          <code>.htmaintenance</code> in the app directory — that needs no database and no session.
+        </p>
       </div>
 
       <div class="card">

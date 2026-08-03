@@ -235,6 +235,19 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
    wrap on a narrow screen rather than stacking into a column of buttons. */
 form.inline { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
+/* Shown to admins only, since they are the only ones who get past maintenance
+   and therefore the only ones who could otherwise forget it is on. */
+.maintbar {
+  padding: 10px 24px;
+  font-size: 0.86rem;
+  text-align: center;
+  color: var(--danger);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.maintbar a { color: var(--danger); text-decoration: underline; margin-left: 6px; }
+.maintbar strong { color: var(--text); }
+
 /* Sits directly under the nav on every page while an address is unconfirmed,
    so the reason an upload will be refused is on screen before it is tried. */
 .verifybar {

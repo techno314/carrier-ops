@@ -120,6 +120,165 @@ function fc_capi_configured(): bool
 }
 
 // ---------------------------------------------------------------------------
+// Maintenance mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the maintenance state lives.
+ *
+ * A file, not a database row, and that is the whole design. Maintenance is
+ * most wanted precisely when the database is the thing being worked on, and a
+ * switch that needs a working database to turn off is not a switch. This one
+ * can be lifted with `rm` over SSH whatever else is broken.
+ *
+ * The `.ht` prefix keeps nginx from serving it, same as the admin code.
+ */
+function fc_maintenance_file(): string
+{
+    return FC_ROOT . '/.htmaintenance';
+}
+
+/**
+ * The maintenance notice, or null when the site is open.
+ *
+ * @return ?array{message:string,since:?int}
+ */
+function fc_maintenance(): ?array
+{
+    static $cached = false;
+    static $state = null;
+
+    if ($cached) {
+        return $state;
+    }
+    $cached = true;
+
+    $path = fc_maintenance_file();
+    $raw = @file_get_contents($path);
+    if ($raw === false) {
+        return $state = null;
+    }
+
+    $message = trim($raw);
+    return $state = [
+        'message' => $message === '' ? 'The board is down for maintenance. It will be back shortly.' : $message,
+        'since' => @filemtime($path) ?: null,
+    ];
+}
+
+function fc_maintenance_set(?string $message): bool
+{
+    $path = fc_maintenance_file();
+    if ($message === null) {
+        return @unlink($path) || !file_exists($path);
+    }
+    return @file_put_contents($path, trim($message), LOCK_EX) !== false;
+}
+
+/**
+ * Stop ordinary requests while maintenance is on.
+ *
+ * Runs automatically when core.php is included, rather than being called at
+ * the top of each page: nine entry points and a guard that has to be on every
+ * one of them is a guard that will eventually be missing from one.
+ *
+ * Three ways past it, in order of how much has to be working:
+ *
+ *   1. Be an admin. Costs a session and a database.
+ *   2. Sign in. account.php stays reachable for exactly this reason -- an
+ *      admin who was signed out when it started, or who signs out during it,
+ *      would otherwise have no way back in through the site at all.
+ *   3. Delete the file. Needs nothing but filesystem access, and works when
+ *      the database is gone.
+ */
+function fc_maintenance_guard(): void
+{
+    if (PHP_SAPI === 'cli') {
+        return;   // cron still has work to do while the doors are shut
+    }
+
+    $state = fc_maintenance();
+    if ($state === null) {
+        return;
+    }
+
+    // Signing in and out stay open. Everything else on that page -- register,
+    // password reset -- does not, since none of it is a way back in for an
+    // administrator and all of it writes.
+    $script = basename((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''));
+    $do = (string) ($_GET['do'] ?? 'login');
+    if ($script === 'account.php' && in_array($do, ['login', 'logout'], true)) {
+        return;
+    }
+
+    // Asking who this is needs the database, which may be the very thing being
+    // repaired. If it cannot answer, nobody is an admin and everybody waits.
+    try {
+        $user = fc_user();
+    } catch (Throwable $e) {
+        $user = null;
+    }
+    if ($user !== null && (int) $user['is_admin'] === 1) {
+        return;
+    }
+
+    fc_maintenance_page($state);
+}
+
+function fc_maintenance_page(array $state): never
+{
+    http_response_code(503);
+    header('Retry-After: 600');
+    // Cloudflare sits in front and caches by URL; a cached 503 would outlive
+    // the maintenance itself.
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+
+    if (fc_wants_json()) {
+        header('Content-Type: application/json');
+        echo json_encode(['error' => $state['message'], 'maintenance' => true], JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+
+    header('Content-Type: text/html; charset=utf-8');
+    ?><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Down for maintenance · Carrier Ops</title>
+<link rel="icon" type="image/svg+xml" href="/fc/assets/icon.svg">
+<link rel="stylesheet" href="/fc/assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="<?= fc_e(fc_url()) ?>">
+    <?= fc_logo_svg(34, 'nav', false) ?>
+    <span>Carrier&nbsp;Ops</span>
+  </a>
+</header>
+<main class="wrap narrow">
+  <div class="card">
+    <h1>Down for maintenance</h1>
+    <p class="muted"><?= nl2br(fc_e($state['message'])) ?></p>
+    <?php if ($state['since'] !== null): ?>
+      <p class="small dim">Since <?= fc_e(gmdate('Y-m-d H:i', $state['since'])) ?> UTC.</p>
+    <?php endif; ?>
+    <div class="actions">
+      <a class="btn ghost" href="<?= fc_e(fc_url('account.php?do=login')) ?>">Administrator sign-in</a>
+    </div>
+  </div>
+</main>
+<footer class="foot">
+  <span>Carrier Ops · unlisted</span>
+</footer>
+</body>
+</html>
+    <?php
+    exit;
+}
+
+// ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 
@@ -622,6 +781,20 @@ function fc_head(string $title, string $active = ''): void
 </div>
 <?php
     }
+
+    // Admins only, and tested explicitly rather than inferred from "they got
+    // here". The sign-in page is deliberately left open during maintenance, so
+    // signed-out visitors reach fc_head too -- and showing them a notice that
+    // the site is shut, with a link offering to turn it off, told anyone who
+    // wandered past something that is none of their business.
+    if ($user !== null && (int) $user['is_admin'] === 1 && fc_maintenance() !== null) {
+        ?>
+<div class="maintbar">
+  <strong>Maintenance mode is on.</strong> Everyone but admins sees a closed sign.
+  <a href="<?= fc_e(fc_url('settings.php?do=admin')) ?>">Turn it off</a>
+</div>
+<?php
+    }
 }
 
 /**
@@ -803,3 +976,11 @@ function fc_render_flash(): void
     }
     echo '<div class="banner ' . fc_e($flash['kind']) . '">' . fc_e($flash['message']) . '</div>';
 }
+
+// ---------------------------------------------------------------------------
+
+// Last, so every function above is defined by the time it runs. Placed here
+// rather than at the top of each page on purpose: this file is the one thing
+// every entry point already includes, and a guard that has to be repeated nine
+// times is a guard that will one day be missing from one of them.
+fc_maintenance_guard();
