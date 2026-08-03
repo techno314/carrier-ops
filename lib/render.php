@@ -655,6 +655,21 @@ function fc_render_carrier_card(array $carrier): void
     $fuelPct = fc_pct($fuel, FC_FUEL_CAPACITY);
     $warnings = fc_carrier_warnings($carrier);
 
+    // Tritium and upkeep both have a stat of their own, and each colours its
+    // own figure when it is in trouble. Repeating them in a banner said the
+    // same thing twice and, worse, only on the cards that had something to
+    // say -- which pushed those cards' stats down and left a row of cards
+    // that no longer lined up. What is left here is the one warning with
+    // nowhere else to appear.
+    $banner = array_values(array_filter(
+        $warnings,
+        static fn(string $w) => !str_starts_with($w, 'Tritium') && !str_starts_with($w, 'Upkeep'),
+    ));
+
+    // The same thresholds the bar below already uses, so the number and the
+    // bar cannot disagree about how bad it is.
+    $fuelTone = $fuel === null ? '' : ($fuelPct < 10 ? 'danger' : ($fuelPct < 25 ? 'warn' : ''));
+
     $next = fc_one(
         "SELECT system, departure_time FROM fc_jumps
           WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time > UTC_TIMESTAMP()
@@ -677,17 +692,22 @@ function fc_render_carrier_card(array $carrier): void
         · <?= fc_docking_badge($carrier) ?>
       </p>
 
-      <?php if ($warnings !== []): ?>
+      <?php if ($banner !== []): ?>
         <div class="banner warn small" style="margin-bottom:12px">
-          <?= fc_e(implode(' · ', $warnings)) ?>
+          <?= fc_e(implode(' · ', $banner)) ?>
         </div>
       <?php endif; ?>
 
       <div class="stats">
         <div class="stat">
           <div class="k">Tritium</div>
-          <div class="v sm"><?= fc_num($fuel) ?> <span class="muted small">/ <?= FC_FUEL_CAPACITY ?> t</span></div>
-          <div class="bar <?= $fuelPct < 10 ? 'danger' : ($fuelPct < 25 ? 'warn' : '') ?>"><span style="width:<?= round($fuelPct, 1) ?>%"></span></div>
+          <div class="v sm"<?= $fuelTone === '' ? '' : ' style="color:var(--' . $fuelTone . ')"' ?>>
+            <?= fc_num($fuel) ?> <span class="muted small">/ <?= FC_FUEL_CAPACITY ?> t</span>
+          </div>
+          <div class="bar <?= $fuelTone ?>"><span style="width:<?= round($fuelPct, 1) ?>%"></span></div>
+          <?php if ($fuelTone !== ''): ?>
+            <div class="muted small" style="margin-top:4px">running low</div>
+          <?php endif; ?>
         </div>
         <div class="stat">
           <div class="k">Free space</div>
