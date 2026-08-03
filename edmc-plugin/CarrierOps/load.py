@@ -36,7 +36,7 @@ import myNotebook as nb
 from config import appname, appversion, config
 
 PLUGIN_NAME = "CarrierOps"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 
 CFG_URL = "carrierops_url"
 CFG_KEY = "carrierops_apikey"
@@ -87,14 +87,22 @@ URGENT_EVENTS = frozenset({
 FLUSH_SECONDS = 20.0
 MAX_BATCH = 200
 
-# A batch that fails is put back rather than dropped. Losing journal events is
-# worse than sending them late: nothing else will ever produce them again, and
-# the board simply ends up with a hole nobody notices. The board is unreachable
-# for ordinary reasons -- maintenance, a restart, a rate limit during a large
-# backfill -- and every one of those used to cost whatever was in flight.
+# A batch that fails is put back rather than dropped. Sending late beats not
+# sending: the board is unreachable for ordinary reasons -- maintenance, a
+# restart, a rate limit during a large backfill -- and each of those used to
+# cost whatever was in flight. Nothing is lost for ever either way, since the
+# journals stay on disk and "Upload past journals" re-reads them, but nobody
+# should have to notice a gap and go and fix it by hand.
 MAX_ATTEMPTS = 6
 BACKOFF_SECONDS = (2, 5, 15, 30, 60)
 MAX_RETRY_WAIT = 120.0
+
+# A closed board is a different thing from a broken one. 503 means somebody
+# deliberately shut it for a while, and the impatient schedule above gives up
+# after about two minutes -- useless against a maintenance window measured in
+# hours. So wait quietly and keep the events until it opens.
+CLOSED_WAIT_SECONDS = 60.0
+MAX_CLOSED_ATTEMPTS = 120
 
 # Carrier callsigns look like V4H-84Q. No starport is named this way, which
 # makes it a safe last resort for identifying a carrier's snapshot files.
@@ -196,15 +204,29 @@ class CarrierOps:
             self._send(label, body, attempt)
             self.queue.task_done()
 
-    def _retry(self, label: str, body: str, attempt: int, why: str, wait: Optional[float] = None) -> None:
+    def _retry(
+        self,
+        label: str,
+        body: str,
+        attempt: int,
+        why: str,
+        wait: Optional[float] = None,
+        patient: bool = False,
+    ) -> None:
         """Put a batch back, or give up on it and say so."""
-        if attempt + 1 >= MAX_ATTEMPTS:
+        limit = MAX_CLOSED_ATTEMPTS if patient else MAX_ATTEMPTS
+        if attempt + 1 >= limit:
             self.set_status(f"gave up: {why}")
-            logger.error("Carrier Ops gave up on %s after %s attempts: %s", label, MAX_ATTEMPTS, why)
+            logger.error("Carrier Ops gave up on %s after %s attempts: %s", label, limit, why)
             return
 
-        delay = wait if wait is not None else BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
-        delay = max(0.0, min(float(delay), MAX_RETRY_WAIT))
+        if wait is not None:
+            delay = float(wait)
+        elif patient:
+            delay = CLOSED_WAIT_SECONDS
+        else:
+            delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
+        delay = max(0.0, min(delay, MAX_RETRY_WAIT))
 
         self.set_status(f"{why}, retrying")
         logger.info("Carrier Ops retrying %s in %.0fs (%s)", label, delay, why)
@@ -251,8 +273,9 @@ class CarrierOps:
             return
 
         if response.status_code == 503:
-            # Maintenance. It ends, and the journal events are still wanted.
-            self._retry(label, body, attempt, "board closed")
+            # Maintenance. It ends, and the journal events are still wanted --
+            # so wait it out rather than giving up in the first two minutes.
+            self._retry(label, body, attempt, "board closed", patient=True)
             return
 
         if response.status_code >= 500:
