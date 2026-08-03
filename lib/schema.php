@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 9;
+const FC_SCHEMA_VERSION = 10;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -61,6 +61,7 @@ function fc_migrate(): void
     fc_ensure_columns();
     fc_drop_columns();
     fc_drop_tables();
+    fc_migrate_capi_tokens();
     fc_backfill();
 
     // Record it in the database too, so a wiped sentinel does not hide which
@@ -182,6 +183,49 @@ function fc_drop_columns(): void
             $db->exec("ALTER TABLE `{$table}` DROP COLUMN `{$column}`");
         }
     }
+}
+
+/**
+ * Reshape fc_capi_tokens from one-link-per-account to many.
+ *
+ * The primary key moved from user_id to a surrogate id, which no ALTER of the
+ * kind fc_ensure_columns performs can express. Driven off the catalogue rather
+ * than the version number so it converges from any starting point, and safe to
+ * re-run: once `id` exists there is nothing to do.
+ *
+ * Existing rows are kept. Losing them would only cost a re-authorise, but a
+ * migration that silently signs everyone out of Frontier is not one worth
+ * writing.
+ */
+function fc_migrate_capi_tokens(): void
+{
+    $db = fc_db();
+
+    $exists = (int) $db->query(
+        "SELECT COUNT(*) FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fc_capi_tokens'"
+    )->fetchColumn();
+    if ($exists === 0) {
+        return;   // fresh install; the CREATE above already made the new shape
+    }
+
+    $hasId = (int) $db->query(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fc_capi_tokens'
+            AND COLUMN_NAME = 'id'"
+    )->fetchColumn();
+    if ($hasId > 0) {
+        return;   // already migrated
+    }
+
+    // A row whose customer_id is null cannot take part in a unique key with
+    // any meaning, and only ever came from a link whose /me call failed.
+    $db->exec('DELETE FROM fc_capi_tokens WHERE customer_id IS NULL');
+
+    $db->exec('ALTER TABLE fc_capi_tokens DROP PRIMARY KEY');
+    $db->exec('ALTER TABLE fc_capi_tokens ADD COLUMN id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST');
+    $db->exec('ALTER TABLE fc_capi_tokens ADD UNIQUE KEY fc_capi_tokens_link (user_id, customer_id)');
+    $db->exec('ALTER TABLE fc_capi_tokens ADD KEY fc_capi_tokens_user (user_id)');
 }
 
 /**
@@ -416,7 +460,15 @@ function fc_schema_statements(): array
             KEY fc_buyers_fetched (fetched_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-        // One Frontier account per Carrier Ops account, so user_id is the key.
+        // One row per Frontier account linked, and an account may link several.
+        // Elite allows one fleet carrier per Frontier account, so watching more
+        // than one carrier means holding more than one authorisation -- which
+        // is a large part of what this board is for.
+        //
+        // Keyed on (user_id, customer_id) rather than user_id alone: with the
+        // latter, authorising a second Frontier account silently overwrote the
+        // first, and the carrier it had claimed went on looking healthy while
+        // never being fetched again.
         //
         // Both tokens are stored encrypted rather than as written: this database
         // is shared with the other apps on this host, and a refresh token is a
@@ -429,7 +481,8 @@ function fc_schema_statements(): array
         // pleasant way to handle personal data is to store it because it
         // happened to be in the response.
         "CREATE TABLE IF NOT EXISTS fc_capi_tokens (
-            user_id INT UNSIGNED NOT NULL PRIMARY KEY,
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            user_id INT UNSIGNED NOT NULL,
             customer_id VARCHAR(64) NULL,
             platform VARCHAR(32) NULL,
             access_token BLOB NULL,
@@ -441,7 +494,9 @@ function fc_schema_statements(): array
             last_fetch_at DATETIME NULL,
             refreshed_at DATETIME NULL,
             linked_at DATETIME NOT NULL,
-            KEY fc_capi_tokens_customer (customer_id)
+            UNIQUE KEY fc_capi_tokens_link (user_id, customer_id),
+            KEY fc_capi_tokens_customer (customer_id),
+            KEY fc_capi_tokens_user (user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // An authorisation in flight. The PKCE verifier has to survive the round

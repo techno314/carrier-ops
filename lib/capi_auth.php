@@ -5,10 +5,17 @@ declare(strict_types=1);
 /**
  * Talking to Frontier's Auth service ourselves.
  *
- * Until now the board only ever saw Companion API data second-hand, forwarded
- * by the EDMC plugin's `capi_fleetcarrier` hook, because obtaining a client id
- * meant an approval we did not have. With one registered, the board can ask
- * Frontier directly and keep itself current without the game or EDMC running.
+ * The board once saw Companion API data only second-hand, forwarded by the
+ * EDMC plugin's `capi_fleetcarrier` hook. With a client id of our own it asks
+ * Frontier directly and stays current with neither the game nor EDMC running.
+ *
+ * Everything here works on a *link* -- one authorised Frontier account -- and
+ * not on a board account, because the two are not the same thing. Elite allows
+ * one fleet carrier per Frontier account, so following several carriers means
+ * holding several authorisations at once. Keying any of this on user_id, as it
+ * was at first, meant a second authorisation quietly replaced the first and
+ * the carrier it had claimed went on looking healthy while never being read
+ * again.
  *
  * The app is registered as a *public* client -- Frontier issues no shared key
  * for it -- so this is the PKCE flow. There is no client secret anywhere in
@@ -218,27 +225,46 @@ function fc_capi_complete(string $code, string $state): array
     }
 
     $userId = (int) $row['user_id'];
-    fc_capi_store($userId, $token['data']);
 
-    // Identity is fetched once, at link time, and only customer_id and platform
-    // are kept. See the note on fc_capi_tokens in schema.php.
+    // Identity comes before storage now, because customer_id is half the key a
+    // link is stored under. Only it and the platform are kept; the name and
+    // email /me also returns are read and dropped.
     $me = fc_capi_get('/me', $token['data']['access_token'] ?? '', FC_AUTH_BASE);
-    if (is_array($me['data'] ?? null)) {
-        fc_exec(
-            'UPDATE fc_capi_tokens SET customer_id = :c, platform = :p WHERE user_id = :u',
-            [
-                'c' => isset($me['data']['customer_id']) ? mb_substr((string) $me['data']['customer_id'], 0, 64) : null,
-                'p' => isset($me['data']['platform']) ? mb_substr((string) $me['data']['platform'], 0, 32) : null,
-                'u' => $userId,
-            ],
-        );
+    $customerId = is_array($me['data'] ?? null) && isset($me['data']['customer_id'])
+        ? mb_substr((string) $me['data']['customer_id'], 0, 64)
+        : null;
+    if ($customerId === null || $customerId === '') {
+        return ['ok' => false, 'error' => 'Frontier did not say which account that was. Try again.'];
     }
+    $platform = is_array($me['data'] ?? null) && isset($me['data']['platform'])
+        ? mb_substr((string) $me['data']['platform'], 0, 32)
+        : null;
+
+    // One Frontier account belongs to one board account. Without this, two
+    // people could both link the same Frontier login and appear to have proved
+    // the same carrier -- and the second would silently never claim it, since
+    // fc_ingest_capi refuses a carrier somebody else already owns.
+    $elsewhere = fc_one(
+        'SELECT user_id FROM fc_capi_tokens WHERE customer_id = :c AND user_id <> :u',
+        ['c' => $customerId, 'u' => $userId],
+    );
+    if ($elsewhere !== null) {
+        return ['ok' => false, 'error' => 'That Frontier account is already connected to a different Carrier Ops account.'];
+    }
+
+    fc_capi_store($userId, $customerId, $token['data'], $platform);
 
     return ['ok' => true, 'error' => null];
 }
 
-/** Write a token response to the account, encrypting both tokens. */
-function fc_capi_store(int $userId, array $data): void
+/**
+ * Write a token response against one link, encrypting both tokens.
+ *
+ * Keyed on (user_id, customer_id): an account may hold several links, one per
+ * Frontier account, and re-authorising an existing one has to update that row
+ * rather than add a second.
+ */
+function fc_capi_store(int $userId, string $customerId, array $data, ?string $platform = null): void
 {
     $expiresIn = isset($data['expires_in']) && is_numeric($data['expires_in'])
         ? (int) $data['expires_in']
@@ -246,12 +272,12 @@ function fc_capi_store(int $userId, array $data): void
 
     fc_exec(
         'INSERT INTO fc_capi_tokens
-             (user_id, access_token, refresh_token, scope, expires_at, needs_reauth, last_error, refreshed_at, linked_at)
-         VALUES (:u, :a, :r, :s, :e, 0, NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+             (user_id, customer_id, platform, access_token, refresh_token, scope,
+              expires_at, needs_reauth, last_error, refreshed_at, linked_at)
+         VALUES (:u, :c, :p, :a, :r, :s, :e, 0, NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP())
          ON DUPLICATE KEY UPDATE
+             platform = COALESCE(VALUES(platform), platform),
              access_token = VALUES(access_token),
-             -- Frontier rotates the refresh token on every exchange, but a
-             -- response that omits it must not wipe the one we have.
              refresh_token = COALESCE(VALUES(refresh_token), refresh_token),
              scope = VALUES(scope),
              expires_at = VALUES(expires_at),
@@ -260,6 +286,8 @@ function fc_capi_store(int $userId, array $data): void
              refreshed_at = UTC_TIMESTAMP()',
         [
             'u' => $userId,
+            'c' => $customerId,
+            'p' => $platform,
             'a' => fc_capi_encrypt($data['access_token'] ?? null),
             'r' => fc_capi_encrypt($data['refresh_token'] ?? null),
             's' => isset($data['scope']) ? mb_substr((string) $data['scope'], 0, 64) : FC_CAPI_SCOPE,
@@ -269,18 +297,18 @@ function fc_capi_store(int $userId, array $data): void
 }
 
 /**
- * A usable access token for this account, refreshing if it has gone stale.
+ * A usable access token for one link, refreshing if it has gone stale.
  *
  * @return array{token:?string,error:?string}
  */
-function fc_capi_access_token(int $userId): array
+function fc_capi_access_token(int $linkId): array
 {
-    $row = fc_one('SELECT * FROM fc_capi_tokens WHERE user_id = :u', ['u' => $userId]);
+    $row = fc_one('SELECT * FROM fc_capi_tokens WHERE id = :id', ['id' => $linkId]);
     if ($row === null) {
-        return ['token' => null, 'error' => 'This account is not linked to Frontier.'];
+        return ['token' => null, 'error' => 'That Frontier link no longer exists.'];
     }
     if ((int) $row['needs_reauth'] === 1) {
-        return ['token' => null, 'error' => 'The Frontier link has expired and needs authorising again.'];
+        return ['token' => null, 'error' => 'That Frontier link has expired and needs authorising again.'];
     }
 
     $expires = $row['expires_at'] === null ? 0 : (int) strtotime((string) $row['expires_at'] . ' UTC');
@@ -291,25 +319,25 @@ function fc_capi_access_token(int $userId): array
         }
         // Undecryptable: the key changed underneath us. Refreshing will not
         // help, since the refresh token is encrypted with the same key.
-        fc_capi_mark_reauth($userId, 'Stored tokens could not be read.');
+        fc_capi_mark_reauth($linkId, 'Stored tokens could not be read.');
         return ['token' => null, 'error' => 'The stored Frontier link could not be read. Authorise again.'];
     }
 
-    return fc_capi_refresh($userId, $row);
+    return fc_capi_refresh($linkId, $row);
 }
 
 /**
- * Exchange the refresh token for a new access token.
+ * Exchange one link's refresh token for a new access token.
  *
  * @return array{token:?string,error:?string}
  */
-function fc_capi_refresh(int $userId, ?array $row = null): array
+function fc_capi_refresh(int $linkId, ?array $row = null): array
 {
-    $row ??= fc_one('SELECT * FROM fc_capi_tokens WHERE user_id = :u', ['u' => $userId]);
+    $row ??= fc_one('SELECT * FROM fc_capi_tokens WHERE id = :id', ['id' => $linkId]);
     $refresh = $row === null ? null : fc_capi_decrypt($row['refresh_token']);
     if ($refresh === null) {
-        fc_capi_mark_reauth($userId, 'No refresh token stored.');
-        return ['token' => null, 'error' => 'The Frontier link needs authorising again.'];
+        fc_capi_mark_reauth($linkId, 'No refresh token stored.');
+        return ['token' => null, 'error' => 'That Frontier link needs authorising again.'];
     }
 
     $token = fc_capi_token_request([
@@ -322,33 +350,40 @@ function fc_capi_refresh(int $userId, ?array $row = null): array
         // A refused refresh is the expiry Frontier warns about; there is no
         // recovering from it without the user authorising again.
         if ($token['fatal']) {
-            fc_capi_mark_reauth($userId, $token['error']);
-            return ['token' => null, 'error' => 'The Frontier link has expired. Authorise again to restore it.'];
+            fc_capi_mark_reauth($linkId, $token['error']);
+            return ['token' => null, 'error' => 'That Frontier link has expired. Authorise again to restore it.'];
         }
-        fc_exec('UPDATE fc_capi_tokens SET last_error = :e WHERE user_id = :u',
-            ['e' => mb_substr($token['error'], 0, 255), 'u' => $userId]);
+        fc_exec('UPDATE fc_capi_tokens SET last_error = :e WHERE id = :id',
+            ['e' => mb_substr($token['error'], 0, 255), 'id' => $linkId]);
         return ['token' => null, 'error' => $token['error']];
     }
 
     // This is the step that matters: the response carries a *new* refresh
     // token, and keeping the old one would work exactly once more and then
     // fail for good.
-    fc_capi_store($userId, $token['data']);
+    fc_capi_store((int) $row['user_id'], (string) $row['customer_id'], $token['data']);
 
     return ['token' => $token['data']['access_token'] ?? null, 'error' => null];
 }
 
-function fc_capi_mark_reauth(int $userId, string $why): void
+function fc_capi_mark_reauth(int $linkId, string $why): void
 {
     fc_exec(
-        'UPDATE fc_capi_tokens SET needs_reauth = 1, last_error = :e WHERE user_id = :u',
-        ['e' => mb_substr($why, 0, 255), 'u' => $userId],
+        'UPDATE fc_capi_tokens SET needs_reauth = 1, last_error = :e WHERE id = :id',
+        ['e' => mb_substr($why, 0, 255), 'id' => $linkId],
     );
 }
 
-function fc_capi_unlink(int $userId): void
+/** Remove one link, or every link an account holds. */
+function fc_capi_unlink(int $userId, ?int $linkId = null): void
 {
-    fc_exec('DELETE FROM fc_capi_tokens WHERE user_id = :u', ['u' => $userId]);
+    if ($linkId === null) {
+        fc_exec('DELETE FROM fc_capi_tokens WHERE user_id = :u', ['u' => $userId]);
+    } else {
+        // Scoped to the user as well as the id, so a guessed id belonging to
+        // somebody else's account finds nothing.
+        fc_exec('DELETE FROM fc_capi_tokens WHERE id = :id AND user_id = :u', ['id' => $linkId, 'u' => $userId]);
+    }
     fc_exec('DELETE FROM fc_capi_pending WHERE user_id = :u', ['u' => $userId]);
 }
 
@@ -403,10 +438,17 @@ function fc_capi_token_request(array $fields): array
     $code = (string) ($decoded['error'] ?? ('http_' . $status));
     $detail = (string) ($decoded['error_description'] ?? '');
 
-    // invalid_grant is the refresh token being spent or expired. invalid_client
-    // and unauthorized_client mean the registration itself is not usable yet --
-    // which is what a pending approval looks like from here.
-    $fatal = in_array($code, ['invalid_grant', 'invalid_client', 'unauthorized_client', 'access_denied'], true);
+    // Which failures are worth retrying, and which mean the grant is dead.
+    //
+    // The status is the reliable half. RFC 6749 has the token endpoint answer
+    // 400, or 401 for a rejected credential, precisely when retrying cannot
+    // help; 5xx is their server having a moment and must not cost anyone their
+    // link. Testing only for named error codes was not enough -- a spent
+    // refresh token comes back `invalid_token` with a 401, not the
+    // `invalid_grant` the specification suggests, so the link was retried for
+    // ever instead of prompting the owner to authorise again.
+    $fatal = in_array($status, [400, 401], true)
+        || in_array($code, ['invalid_grant', 'invalid_token', 'invalid_client', 'unauthorized_client', 'access_denied'], true);
 
     // Frontier's description is not always fit to show. A bad authorisation
     // code comes back as a raw Doctrine exception naming its ORM and the value
@@ -415,7 +457,8 @@ function fc_capi_token_request(array $fields): array
     error_log('fc: Frontier /token refused (' . $status . ') ' . $code . ' ' . $detail);
 
     $friendly = match (true) {
-        $code === 'invalid_grant' => 'Frontier would not accept that authorisation — it may have already been used or expired.',
+        $code === 'invalid_grant', $code === 'invalid_token' =>
+            'Frontier would not accept that authorisation — it has expired or already been used.',
         $code === 'invalid_client', $code === 'unauthorized_client' =>
             'Frontier does not currently accept this application. If it is still awaiting approval, that is expected.',
         $code === 'access_denied' => 'Frontier declined the request.',
@@ -467,7 +510,11 @@ function fc_capi_get(string $path, string $accessToken, string $base = FC_CAPI_B
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch /fleetcarrier for an account and apply it.
+ * Fetch /fleetcarrier for one link and apply it.
+ *
+ * A link, not an account: Elite allows one fleet carrier per Frontier account,
+ * so watching several carriers means holding several authorisations, and each
+ * has to be asked separately.
  *
  * `$force` is a person pressing a button; without it the interval is respected,
  * because this is Frontier's server and a page refresh is not a reason to ask
@@ -475,12 +522,14 @@ function fc_capi_get(string $path, string $accessToken, string $base = FC_CAPI_B
  *
  * @return array{ok:bool,note:?string,error:?string}
  */
-function fc_capi_sync(array $user, bool $force = false): array
+function fc_capi_sync(array $user, int $linkId, bool $force = false): array
 {
-    $userId = (int) $user['id'];
-    $row = fc_one('SELECT * FROM fc_capi_tokens WHERE user_id = :u', ['u' => $userId]);
+    $row = fc_one(
+        'SELECT * FROM fc_capi_tokens WHERE id = :id AND user_id = :u',
+        ['id' => $linkId, 'u' => $user['id']],
+    );
     if ($row === null) {
-        return ['ok' => false, 'note' => null, 'error' => 'This account is not linked to Frontier.'];
+        return ['ok' => false, 'note' => null, 'error' => 'No such Frontier link on this account.'];
     }
 
     if (!$force && $row['last_fetch_at'] !== null) {
@@ -490,27 +539,27 @@ function fc_capi_sync(array $user, bool $force = false): array
         }
     }
 
-    $access = fc_capi_access_token($userId);
+    $access = fc_capi_access_token($linkId);
     if ($access['token'] === null) {
         return ['ok' => false, 'note' => null, 'error' => $access['error']];
     }
 
     $response = fc_capi_get('/fleetcarrier', $access['token']);
 
-    // 204 means the account has no carrier -- not an error, just nothing to do.
+    // 204 means that account has no carrier -- not an error, just nothing to do.
     if ($response['status'] === 204 || ($response['error'] === null && $response['data'] === null)) {
-        fc_exec('UPDATE fc_capi_tokens SET last_fetch_at = UTC_TIMESTAMP(), last_error = NULL WHERE user_id = :u', ['u' => $userId]);
-        return ['ok' => false, 'note' => 'Frontier reports no fleet carrier on this account.', 'error' => null];
+        fc_exec('UPDATE fc_capi_tokens SET last_fetch_at = UTC_TIMESTAMP(), last_error = NULL WHERE id = :id', ['id' => $linkId]);
+        return ['ok' => false, 'note' => 'Frontier reports no fleet carrier on that account.', 'error' => null];
     }
 
     if ($response['error'] !== null) {
         // A 401 here after a good refresh means the grant has been withdrawn.
         if ($response['status'] === 401) {
-            fc_capi_mark_reauth($userId, 'Frontier rejected the token.');
-            return ['ok' => false, 'note' => null, 'error' => 'Frontier rejected the link. Authorise again.'];
+            fc_capi_mark_reauth($linkId, 'Frontier rejected the token.');
+            return ['ok' => false, 'note' => null, 'error' => 'Frontier rejected that link. Authorise it again.'];
         }
-        fc_exec('UPDATE fc_capi_tokens SET last_error = :e WHERE user_id = :u',
-            ['e' => mb_substr($response['error'], 0, 255), 'u' => $userId]);
+        fc_exec('UPDATE fc_capi_tokens SET last_error = :e WHERE id = :id',
+            ['e' => mb_substr($response['error'], 0, 255), 'id' => $linkId]);
         return ['ok' => false, 'note' => null, 'error' => $response['error']];
     }
 
@@ -518,13 +567,15 @@ function fc_capi_sync(array $user, bool $force = false): array
         return ['ok' => false, 'note' => null, 'error' => 'Frontier sent something this does not recognise.'];
     }
 
-    // Straight into the parser the EDMC plugin already feeds, so both routes
-    // produce identical state.
-    $result = fc_ingest_capi($response['data'], $user);
+    // The claiming customer_id is passed explicitly rather than looked up from
+    // the account: with several links, "this account's customer_id" is no
+    // longer a single answer, and the carrier must be attributed to the
+    // Frontier account whose token actually fetched it.
+    $result = fc_ingest_capi($response['data'], $user, null, (string) $row['customer_id']);
 
     fc_exec(
-        'UPDATE fc_capi_tokens SET last_fetch_at = UTC_TIMESTAMP(), last_error = NULL WHERE user_id = :u',
-        ['u' => $userId],
+        'UPDATE fc_capi_tokens SET last_fetch_at = UTC_TIMESTAMP(), last_error = NULL WHERE id = :id',
+        ['id' => $linkId],
     );
 
     if ($result['applied'] && $result['carrier_id'] !== null) {
@@ -539,7 +590,7 @@ function fc_capi_sync(array $user, bool $force = false): array
         'INSERT INTO fc_uploads (user_id, source, filename, bytes, events_seen, events_applied, carriers_touched, ts)
          VALUES (:uid, :src, :file, 0, 1, :applied, :carriers, UTC_TIMESTAMP())',
         [
-            'uid' => $userId,
+            'uid' => (int) $user['id'],
             'src' => 'capi',
             'file' => '/fleetcarrier',
             'applied' => $result['applied'] ? 1 : 0,
@@ -550,8 +601,53 @@ function fc_capi_sync(array $user, bool $force = false): array
     return ['ok' => (bool) $result['applied'], 'note' => $result['note'], 'error' => null];
 }
 
-/** The link row for a user, or null. */
-function fc_capi_link(int $userId): ?array
+/**
+ * Sync every link an account holds.
+ *
+ * @return array{synced:int,errors:string[],notes:string[]}
+ */
+function fc_capi_sync_all(array $user, bool $force = false): array
 {
-    return fc_one('SELECT * FROM fc_capi_tokens WHERE user_id = :u', ['u' => $userId]);
+    $out = ['synced' => 0, 'errors' => [], 'notes' => []];
+    foreach (fc_capi_links((int) $user['id']) as $link) {
+        $result = fc_capi_sync($user, (int) $link['id'], $force);
+        if ($result['ok']) {
+            $out['synced']++;
+        }
+        if ($result['error'] !== null) {
+            $out['errors'][] = ($link['customer_id'] ?? 'link') . ': ' . $result['error'];
+        } elseif ($result['note'] !== null) {
+            $out['notes'][] = $result['note'];
+        }
+    }
+    return $out;
+}
+
+/**
+ * Every Frontier link an account holds, with the carrier each one claimed.
+ *
+ * The carrier is joined in because a customer_id is not something anyone
+ * recognises; the callsign is how you tell one link from another.
+ *
+ * @return array<int,array>
+ */
+function fc_capi_links(int $userId): array
+{
+    return fc_all(
+        'SELECT t.*, c.id AS carrier_id, c.callsign, c.name AS carrier_name, c.system
+           FROM fc_capi_tokens t
+           LEFT JOIN fc_carriers c ON c.owner_customer_id = t.customer_id
+          WHERE t.user_id = :u
+          ORDER BY t.linked_at ASC',
+        ['u' => $userId],
+    );
+}
+
+/** One link, scoped to its owner so a guessed id finds nothing. */
+function fc_capi_link(int $linkId, int $userId): ?array
+{
+    return fc_one(
+        'SELECT * FROM fc_capi_tokens WHERE id = :id AND user_id = :u',
+        ['id' => $linkId, 'u' => $userId],
+    );
 }

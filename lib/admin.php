@@ -115,8 +115,10 @@ function fc_render_admin(array $admin): void
                 (SELECT COUNT(*) FROM fc_carriers c WHERE c.owner_user_id = u.id) AS carriers,
                 (SELECT COUNT(*) FROM fc_uploads p WHERE p.user_id = u.id) AS uploads,
                 (SELECT MAX(p.ts) FROM fc_uploads p WHERE p.user_id = u.id) AS last_upload,
-                (SELECT k.customer_id FROM fc_capi_tokens k WHERE k.user_id = u.id) AS customer_id,
-                (SELECT k.needs_reauth FROM fc_capi_tokens k WHERE k.user_id = u.id) AS needs_reauth
+                (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id) AS links,
+                (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id AND k.needs_reauth = 1) AS links_stale,
+                (SELECT GROUP_CONCAT(k.customer_id ORDER BY k.id SEPARATOR ', ')
+                   FROM fc_capi_tokens k WHERE k.user_id = u.id) AS customer_ids
            FROM fc_users u
           ORDER BY u.created_at DESC',
     );
@@ -167,13 +169,17 @@ function fc_render_admin(array $admin): void
                   <div class="small muted"><?= fc_e($u['cmdr_name'] ?? '—') ?> · joined <?= fc_e(fc_dt($u['created_at'])) ?></div>
                 </td>
                 <td class="small">
-                  <?php if ($u['customer_id'] === null): ?>
-                    <span class="badge off">Not linked</span>
+                  <?php if ((int) $u['links'] === 0): ?>
+                    <span class="badge off">Not connected</span>
                   <?php else: ?>
-                    <span class="mono"><?= fc_e($u['customer_id']) ?></span>
-                    <div><?= (int) $u['needs_reauth'] === 1
-                        ? '<span class="badge warn">Needs re-authorising</span>'
-                        : '<span class="badge on">Linked</span>' ?></div>
+                    <span class="mono"><?= fc_e($u['customer_ids'] ?? '') ?></span>
+                    <div>
+                      <?php if ((int) $u['links_stale'] > 0): ?>
+                        <span class="badge warn"><?= (int) $u['links_stale'] ?> of <?= (int) $u['links'] ?> stale</span>
+                      <?php else: ?>
+                        <span class="badge on"><?= (int) $u['links'] ?> connected</span>
+                      <?php endif; ?>
+                    </div>
                   <?php endif; ?>
                 </td>
                 <td class="num"><?= (int) $u['carriers'] ?></td>
@@ -207,9 +213,9 @@ function fc_render_admin(array $admin): void
                                 onclick="return confirm('Make <?= fc_e($u['username']) ?> an admin? They will be able to see and manage every carrier.')">Make admin</button>
                       <?php endif; ?>
 
-                      <?php if ($u['customer_id'] !== null): ?>
+                      <?php if ((int) $u['links'] > 0): ?>
                         <button class="btn ghost sm" name="action" value="admin_unlink"
-                                onclick="return confirm('Unlink <?= fc_e($u['username']) ?> from Frontier? They will have to authorise again to upload.')">Unlink Frontier</button>
+                                onclick="return confirm('Disconnect every Frontier account from <?= fc_e($u['username']) ?>? They will have to authorise again to upload.')">Disconnect Frontier</button>
                       <?php endif; ?>
 
                       <button class="btn danger ghost sm" name="action" value="admin_delete"

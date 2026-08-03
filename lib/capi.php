@@ -5,15 +5,15 @@ declare(strict_types=1);
 /**
  * Reading Frontier's Companion API `/fleetcarrier` payload.
  *
- * We never talk to Frontier ourselves — that needs a client id issued to an
- * approved application, and its refresh tokens expire 25 days after the user
- * authorises, so every owner would have to log in again roughly monthly. That
- * is the dependency this whole app was written to avoid.
+ * Parsing only. Two things produce a payload for it and neither belongs here:
+ * lib/capi_auth.php, which fetches one with our own registered client, and the
+ * EDMC plugin, which forwards what EDMarketConnector already fetched with its
+ * own. Both arrive in the same shape, so both end up in fc_ingest_capi and the
+ * board cannot tell which route a carrier came in by.
  *
- * EDMarketConnector already holds an approved client id and already queries
- * this endpoint, and it hands the result to plugins through `capi_fleetcarrier`.
- * So the CarrierOps plugin forwards the payload here and we parse it. No
- * registration, no expiry, no login to break.
+ * This is also the only place a carrier may be claimed. A journal cannot do it
+ * -- see fc_carrier_for_write -- because a journal is a text file its owner
+ * writes, whereas one of these was fetched with a token Frontier issued.
  *
  * What this adds over the journal:
  *
@@ -65,7 +65,7 @@ function fc_capi_name(mixed $hex): ?string
  *
  * @return array{applied:bool,carrier_id:?int,callsign:?string,note:?string}
  */
-function fc_ingest_capi(array $data, array $user, ?string $ts = null): array
+function fc_ingest_capi(array $data, array $user, ?string $ts = null, ?string $customerId = null): array
 {
     $ts ??= gmdate('Y-m-d H:i:s');
     $blank = ['applied' => false, 'carrier_id' => null, 'callsign' => null, 'note' => null];
@@ -96,14 +96,20 @@ function fc_ingest_capi(array $data, array $user, ?string $ts = null): array
     $carrier = fc_carrier($carrierId);
 
     // This is the only path that may claim a carrier, because it is the only
-    // one where the claim is backed by anything: the payload was fetched with
-    // a token Frontier issued to this account, either by the EDMC plugin or by
-    // our own authorisation. The customer_id is recorded alongside so the
-    // claim can be traced back to the Frontier account that made it.
-    $customerId = fc_one(
-        'SELECT customer_id FROM fc_capi_tokens WHERE user_id = :u',
-        ['u' => $user['id']],
-    )['customer_id'] ?? null;
+    // one where the claim is backed by anything: the payload was fetched with a
+    // token Frontier issued to this account, either by the EDMC plugin or by
+    // our own authorisation. The customer_id is recorded alongside, so a claim
+    // can be traced to the Frontier account that made it.
+    //
+    // fc_capi_sync passes it, because it knows which link did the fetching.
+    // The fallback is for the EDMC plugin, which forwards a payload without
+    // saying which Frontier account it came from: with one link there is no
+    // ambiguity, and with several we decline to guess rather than attribute a
+    // carrier to the wrong account.
+    if ($customerId === null) {
+        $links = fc_all('SELECT customer_id FROM fc_capi_tokens WHERE user_id = :u', ['u' => $user['id']]);
+        $customerId = count($links) === 1 ? ($links[0]['customer_id'] ?? null) : null;
+    }
 
     if ($carrier === null) {
         fc_exec(

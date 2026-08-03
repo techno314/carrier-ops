@@ -108,10 +108,13 @@ try {
 // for an account whose carrier has nothing new to say, and fc_capi_access_token
 // renews as a side effect of being asked.
 if (fc_capi_configured()) {
+    // One row per Frontier account linked, not per user: an account may hold
+    // several, and each has its own token and its own carrier to fetch.
     $links = fc_all(
-        'SELECT t.*, u.id AS uid FROM fc_capi_tokens t
+        'SELECT t.* FROM fc_capi_tokens t
            JOIN fc_users u ON u.id = t.user_id
-          WHERE t.needs_reauth = 0 AND u.is_banned = 0',
+          WHERE t.needs_reauth = 0 AND u.is_banned = 0
+          ORDER BY t.id',
     );
 
     foreach ($links as $link) {
@@ -119,6 +122,7 @@ if (fc_capi_configured()) {
         if ($user === null) {
             continue;
         }
+        $linkId = (int) $link['id'];
 
         try {
             // Renew well ahead of expiry rather than at the last moment, so a
@@ -126,28 +130,28 @@ if (fc_capi_configured()) {
             // actually lapses.
             $expires = $link['expires_at'] === null ? 0 : (int) strtotime((string) $link['expires_at'] . ' UTC');
             if ($expires < time() + 3600) {
-                $refresh = fc_capi_refresh((int) $link['user_id']);
+                $refresh = fc_capi_refresh($linkId);
                 if ($refresh['error'] === null) {
                     $counts['refreshed']++;
-                    $log('renewed token for user ' . $link['user_id']);
+                    $log('renewed token for link ' . $linkId . ' (user ' . $link['user_id'] . ')');
                 } else {
                     $counts['errors']++;
-                    $log('renewal failed for user ' . $link['user_id'] . ': ' . $refresh['error']);
+                    $log('renewal failed for link ' . $linkId . ': ' . $refresh['error']);
                     continue;   // no point asking for the carrier without a token
                 }
             }
 
-            $result = fc_capi_sync($user);   // not forced: respects the interval
+            $result = fc_capi_sync($user, $linkId);   // not forced: respects the interval
             if ($result['ok']) {
                 $counts['synced']++;
-                $log('synced carrier for user ' . $link['user_id']);
+                $log('synced carrier for link ' . $linkId);
             } elseif ($result['error'] !== null) {
                 $counts['errors']++;
-                $log('sync failed for user ' . $link['user_id'] . ': ' . $result['error']);
+                $log('sync failed for link ' . $linkId . ': ' . $result['error']);
             }
         } catch (Throwable $e) {
             $counts['errors']++;
-            error_log('fc cron: user ' . $link['user_id'] . ': ' . $e->getMessage());
+            error_log('fc cron: link ' . $linkId . ': ' . $e->getMessage());
         }
     }
 }

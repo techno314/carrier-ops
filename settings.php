@@ -146,27 +146,29 @@ fc_head('Settings', 'settings');
     </form>
   </div>
 
-  <?php $capiLink = fc_capi_link((int) $user['id']); ?>
+  <?php $capiLinks = fc_capi_links((int) $user['id']);
+        $capiStale = count(array_filter($capiLinks, static fn(array $l) => (int) $l['needs_reauth'] === 1)); ?>
   <div class="card">
     <h2>Frontier account
       <?php if (!fc_capi_configured()): ?>
         <span class="badge off">Unavailable</span>
-      <?php elseif ($capiLink === null): ?>
-        <span class="badge off">Not linked</span>
-      <?php elseif ((int) $capiLink['needs_reauth'] === 1): ?>
-        <span class="badge bad">Needs re-authorising</span>
+      <?php elseif ($capiLinks === []): ?>
+        <span class="badge off">Not connected</span>
+      <?php elseif ($capiStale > 0): ?>
+        <span class="badge bad"><?= $capiStale ?> need<?= $capiStale === 1 ? 's' : '' ?> re-authorising</span>
       <?php else: ?>
-        <span class="badge on">Linked</span>
+        <span class="badge on"><?= count($capiLinks) ?> connected</span>
       <?php endif; ?>
     </h2>
     <p class="muted small">
-      Linking to Frontier lets the board read your carrier directly, including the cargo hold and the real
-      upkeep figures, without the game or EDMC running. Journal uploads keep working either way.
+      Connecting to Frontier lets the board read your carrier directly, including the cargo hold and the real
+      upkeep figures, without the game or EDMC running. Elite allows one carrier per Frontier account, so
+      connect several to watch several. Journal uploads keep working either way.
     </p>
     <?php if (fc_capi_configured()): ?>
       <div class="actions">
-        <a class="btn<?= $capiLink === null ? '' : ' ghost' ?>" href="<?= fc_e(fc_url('capi.php')) ?>">
-          <?= $capiLink === null ? 'Connect to Frontier' : 'Manage the link' ?>
+        <a class="btn<?= $capiLinks === [] ? '' : ' ghost' ?>" href="<?= fc_e(fc_url('capi.php')) ?>">
+          <?= $capiLinks === [] ? 'Connect to Frontier' : 'Manage connected accounts' ?>
         </a>
       </div>
     <?php else: ?>
