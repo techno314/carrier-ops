@@ -1,14 +1,6 @@
-# Written at runtime by the migration runner; per-deployment, not source.
 .schema-version
 .htadmin-code
 .htsmtp-password
-# Frontier Auth client id. Public by nature (it travels in the browser),
-# but kept out of the repo because Frontier asks that keys not be published.
 .htcapi-client
-
-# Encrypts stored Frontier tokens. Losing it just means everyone re-authorises.
 .htcapi-key
-
-# Maintenance mode is a per-deployment switch, not source. Tracked once by
-# mistake, which meant a fresh checkout would arrive with the site closed.
 .htmaintenance
