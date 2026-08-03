@@ -176,6 +176,13 @@ p { line-height: 1.55; }
 .grid + .card, .grid + .grid, .card + .grid { margin-top: 18px; }
 
 .grid { display: grid; gap: 18px; }
+/*
+ * Inside a grid the gap does the spacing, but `.card + .card` was still
+ * matching, so every card after the first started 18px lower than its
+ * neighbour -- which is why two cards side by side had their titles, stats and
+ * buttons all off by exactly that much.
+ */
+.grid > .card + .card { margin-top: 0; }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .grid.three { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 

@@ -704,10 +704,13 @@ function fc_render_carrier_card(array $carrier): void
           <div class="v sm"<?= $fuelTone === '' ? '' : ' style="color:var(--' . $fuelTone . ')"' ?>>
             <?= fc_num($fuel) ?> <span class="muted small">/ <?= FC_FUEL_CAPACITY ?> t</span>
           </div>
+          <?php
+          // No caption when it is low. One would only appear on the carriers
+          // in trouble, making that cell taller than the same cell on the card
+          // beside it and dropping every row below it out of line. The red
+          // figure and the red bar already say it.
+          ?>
           <div class="bar <?= $fuelTone ?>"><span style="width:<?= round($fuelPct, 1) ?>%"></span></div>
-          <?php if ($fuelTone !== ''): ?>
-            <div class="muted small" style="margin-top:4px">running low</div>
-          <?php endif; ?>
         </div>
         <div class="stat">
           <div class="k">Free space</div>
