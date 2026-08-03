@@ -723,7 +723,6 @@ case 'manage':
 
     <?php
     $hooks = fc_all('SELECT * FROM fc_webhooks WHERE carrier_id = :cid ORDER BY id', ['cid' => $carrier['id']]);
-    $kinds = fc_webhook_kinds();
     ?>
     <div class="card">
       <h2>Discord</h2>
@@ -734,9 +733,7 @@ case 'manage':
         credential involved, so treat it like a password — anyone holding it can post to that channel.
       </p>
 
-      <?php foreach ($hooks as $hook):
-          $on = explode(',', (string) $hook['events']);
-          ?>
+      <?php foreach ($hooks as $hook): ?>
         <form method="post" class="webhook">
           <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
           <input type="hidden" name="webhook_id" value="<?= (int) $hook['id'] ?>">
@@ -768,20 +765,6 @@ case 'manage':
             <label for="label<?= (int) $hook['id'] ?>">Name</label>
             <input id="label<?= (int) $hook['id'] ?>" name="label" type="text" maxlength="64"
                    value="<?= fc_e($hook['label'] ?? '') ?>" placeholder="Squadron channel">
-          </div>
-
-          <p class="small muted" style="margin-bottom:0">What to list under <em>Recent</em> on the board:</p>
-          <div class="checks">
-            <?php foreach ($kinds as $kind => $spec): ?>
-              <div class="check">
-                <input type="checkbox" id="k<?= (int) $hook['id'] ?><?= fc_e(str_replace('.', '', $kind)) ?>"
-                       name="events[]" value="<?= fc_e($kind) ?>" <?= in_array($kind, $on, true) ? 'checked' : '' ?>>
-                <label for="k<?= (int) $hook['id'] ?><?= fc_e(str_replace('.', '', $kind)) ?>">
-                  <?= fc_e($spec['label']) ?>
-                  <span class="dim small"><?= fc_e($spec['hint']) ?></span>
-                </label>
-              </div>
-            <?php endforeach; ?>
           </div>
 
           <p class="small dim">
@@ -828,29 +811,14 @@ case 'manage':
             <input id="newlabel" name="label" type="text" maxlength="64" placeholder="Squadron channel">
           </div>
 
-          <p class="small muted" style="margin-bottom:0">What to list under <em>Recent</em> on the board:</p>
-          <div class="checks">
-            <?php foreach ($kinds as $kind => $spec): ?>
-              <div class="check">
-                <input type="checkbox" id="new<?= fc_e(str_replace('.', '', $kind)) ?>"
-                       name="events[]" value="<?= fc_e($kind) ?>" <?= $spec['default'] ? 'checked' : '' ?>>
-                <label for="new<?= fc_e(str_replace('.', '', $kind)) ?>">
-                  <?= fc_e($spec['label']) ?>
-                  <span class="dim small"><?= fc_e($spec['hint']) ?></span>
-                </label>
-              </div>
-            <?php endforeach; ?>
-          </div>
-
           <div class="actions"><button class="btn" type="submit">Add webhook</button></div>
         </form>
       <?php endif; ?>
 
       <p class="small dim" style="margin-bottom:0">
         One message per carrier, edited in place — the channel never fills up, and the newest state is always the
-        message you are already looking at. Edits are sent after your upload finishes, so nothing waits on Discord.
-        Journals older than six hours are ingested silently, so uploading a backlog fills in the board without
-        rewriting it with journeys that ended weeks ago.
+        message you are already looking at. Edits go out after your upload finishes, so nothing waits on Discord,
+        and an update that would not change anything is not sent at all.
       </p>
     </div>
 

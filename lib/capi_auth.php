@@ -587,7 +587,6 @@ function fc_capi_sync(array $user, int $linkId, bool $force = false): array
     if ($result['applied'] && $result['carrier_id'] !== null) {
         fc_fill_itinerary_bodies($result['carrier_id']);
         fc_close_itinerary($result['carrier_id']);
-        fc_webhook_check_finance($result['carrier_id']);
         fc_webhook_board_refresh($result['carrier_id']);
         fc_webhook_flush_after_response();
     }

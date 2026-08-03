@@ -109,9 +109,7 @@ function fc_ingest_text(string $text, array $user, string $filename, string $sou
     foreach (array_keys($report['carriers']) as $carrierId) {
         fc_fill_itinerary_bodies((int) $carrierId);
         fc_close_itinerary((int) $carrierId);
-        // Both of these read state that is only settled now the whole file has
-        // been applied, so neither belongs in the per-event pass above.
-        fc_webhook_check_finance((int) $carrierId);
+        // Reads state that is only settled now the whole file has been applied.
         fc_webhook_board_refresh((int) $carrierId);
     }
     fc_webhook_flush_after_response();
@@ -154,14 +152,10 @@ function fc_ingest_capi_report(array $data, array $user, string $filename, strin
         fc_fill_itinerary_bodies($result['carrier_id']);
         fc_close_itinerary($result['carrier_id']);
 
-        // Only the board and the upkeep warning, deliberately. A Companion API
-        // payload restates the carrier's whole condition rather than reporting
-        // that anything happened, so turning it into per-event notices would
-        // announce the same arrival the journal already announced. The board is
-        // a summary and simply reflects whatever is newest, so it is safe --
-        // and it is what carries a jump made while the commander was offline,
-        // which the journal never sees at all.
-        fc_webhook_check_finance($result['carrier_id']);
+        // The board simply reflects whatever is newest, so a Companion API
+        // payload updates it exactly as a journal upload does -- and it is what
+        // carries a jump made while the commander was offline, which the
+        // journal never sees at all.
         fc_webhook_board_refresh($result['carrier_id']);
     }
     fc_webhook_flush_after_response();
@@ -411,10 +405,6 @@ function fc_apply_event(array $event, array $user, array &$report): bool
     if ($applied) {
         $fresh = fc_carrier($carrierId);
         fc_touch_carrier($report, $carrierId, $fresh['callsign'] ?? null);
-        // $carrier is the row as it was before the handler ran, which is what
-        // lets a fuel level *crossing* a threshold be told from one that was
-        // already under it.
-        fc_webhook_on_event($fresh ?? $carrier, $carrier, $event, $name, $ts);
     }
 
     return $applied;

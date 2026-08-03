@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 11;
+const FC_SCHEMA_VERSION = 12;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -163,6 +163,9 @@ function fc_drop_columns(): void
     // read a mailbox.
     $unwanted = [
         'fc_users' => ['discord_id', 'email_verified_at'],
+        // Per-event subscriptions had nothing left to filter once the board
+        // stopped listing individual events.
+        'fc_webhooks' => ['events'],
     ];
 
     $db = fc_db();
@@ -236,8 +239,10 @@ function fc_migrate_capi_tokens(): void
  */
 function fc_drop_tables(): void
 {
-    // Email verification was replaced by Frontier authorisation.
-    foreach (['fc_email_tokens'] as $table) {
+    // fc_email_tokens: email verification was replaced by Frontier auth.
+    // fc_activity: the board briefly listed recent events; it shows current
+    // state only, so nothing reads the log any more.
+    foreach (['fc_email_tokens', 'fc_activity'] as $table) {
         fc_db()->exec("DROP TABLE IF EXISTS `{$table}`");
     }
 }
@@ -526,29 +531,6 @@ function fc_schema_statements(): array
             KEY fc_resets_user (user_id, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
-        // What has happened to a carrier lately, in the words the Discord
-        // board shows.
-        //
-        // These used to be separate messages, one per event, which is how a
-        // channel ends up as a wall of one-line posts nobody scrolls back
-        // through. The board is a single message that gets edited, so the
-        // history has to live somewhere it can be re-rendered from -- here.
-        //
-        // dedupe_hash identifies the thing that happened rather than the
-        // moment it was noticed, so re-uploading a journal does not double an
-        // entry.
-        "CREATE TABLE IF NOT EXISTS fc_activity (
-            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-            carrier_id BIGINT UNSIGNED NOT NULL,
-            ts DATETIME NOT NULL,
-            kind VARCHAR(32) NOT NULL,
-            text VARCHAR(255) NOT NULL,
-            dedupe_hash CHAR(40) NOT NULL,
-            created_at DATETIME NOT NULL,
-            UNIQUE KEY fc_activity_dedupe (dedupe_hash),
-            KEY fc_activity_carrier (carrier_id, ts)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-
         // A Discord webhook the owner has pointed at one of their carriers.
         // board_message_id is the message the status board keeps editing; it is
         // only ever obtained by posting with ?wait=true, since a plain webhook
@@ -559,7 +541,6 @@ function fc_schema_statements(): array
             created_by INT UNSIGNED NULL,
             label VARCHAR(64) NULL,
             url VARCHAR(255) NOT NULL,
-            events VARCHAR(255) NOT NULL DEFAULT '',
             show_finance TINYINT(1) NOT NULL DEFAULT 0,
             board_enabled TINYINT(1) NOT NULL DEFAULT 0,
             board_message_id VARCHAR(32) NULL,
