@@ -168,6 +168,13 @@ p { line-height: 1.55; }
 .card + .card { margin-top: 18px; }
 .card h2 { display: flex; align-items: baseline; gap: 10px; }
 
+/*
+ * Anything following a grid needs the same 18px a card following a card gets.
+ * `.card + .card` never matched the card after the fleet grid, so it sat
+ * against it with no gap at all.
+ */
+.grid + .card, .grid + .grid, .card + .grid { margin-top: 18px; }
+
 .grid { display: grid; gap: 18px; }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .grid.three { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
@@ -293,7 +300,16 @@ form.inline { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: 
    something wrong, so a healthy fleet stays quiet and a problem stands out. */
 .carriercard h2 a { color: var(--text); }
 .carriercard h2 a:hover { color: var(--accent); }
-.carriercard .actions { margin-top: 14px; }
+/*
+ * Cards in a row are already the same height, because grid items stretch. What
+ * they were not was the same *shape*: a carrier with a warning pushes its own
+ * stats down, so the buttons finished at different heights and the pair looked
+ * misaligned. A column with the actions pushed to the end puts them on the same
+ * line whatever sits above them.
+ */
+.carriercard { display: flex; flex-direction: column; }
+.carriercard .stats { margin-bottom: 14px; }
+.carriercard .actions { margin-top: auto; }
 /*
  * Two columns, not auto-fit. The grid draws its own background and lets it
  * show through the 1px gaps, so any cell without a .stat in it becomes a grey
