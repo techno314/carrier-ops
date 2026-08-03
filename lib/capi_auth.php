@@ -562,6 +562,24 @@ function fc_capi_sync(array $user, int $linkId, bool $force = false): array
         fc_webhook_board_refresh($squadron['carrier_id']);
     }
 
+    // Logged as its own fetch, and logged here rather than at the end: an
+    // account whose only carrier is its squadron's gets a 204 from
+    // /fleetcarrier and returns below, which would leave its one real update
+    // missing from the upload log entirely.
+    if ($squadron['callsign'] !== null) {
+        fc_exec(
+            'INSERT INTO fc_uploads (user_id, source, filename, bytes, events_seen, events_applied, carriers_touched, ts)
+             VALUES (:uid, :src, :file, 0, 1, :applied, :carriers, UTC_TIMESTAMP())',
+            [
+                'uid' => (int) $user['id'],
+                'src' => 'capi',
+                'file' => '/squadron',
+                'applied' => $squadron['carrier_id'] === null ? 0 : 1,
+                'carriers' => mb_substr((string) $squadron['callsign'], 0, 190),
+            ],
+        );
+    }
+
     $response = fc_capi_get('/fleetcarrier', $access['token']);
 
     // 204 means that account has no carrier -- not an error, just nothing to do.

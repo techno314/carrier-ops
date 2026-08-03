@@ -57,13 +57,16 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
  * who leads it. Matching one to the other is what turns "a member" into "this
  * member, at this rank".
  *
- * @return array{ok:bool,note:?string,error:?string,carrier_id:?int}
+ * `callsign` is set whenever the squadron turned out to have a carrier, bound
+ * or not, so the caller can record the fetch in the upload log either way.
+ *
+ * @return array{ok:bool,note:?string,error:?string,carrier_id:?int,callsign:?string}
  */
 function fc_squadron_sync(array $user, array $link, string $token, ?string $ts = null): array
 {
     $ts ??= gmdate('Y-m-d H:i:s');
     $linkId = (int) $link['id'];
-    $blank = ['ok' => false, 'note' => null, 'error' => null, 'carrier_id' => null];
+    $blank = ['ok' => false, 'note' => null, 'error' => null, 'carrier_id' => null, 'callsign' => null];
 
     $profile = fc_capi_get('/profile', $token);
     if (!is_array($profile['data'] ?? null)) {
@@ -97,7 +100,7 @@ function fc_squadron_sync(array $user, array $link, string $token, ?string $ts =
 
     $sc = is_array($squadron['squadronCarrier'] ?? null) ? $squadron['squadronCarrier'] : null;
     if ($sc === null) {
-        return ['ok' => true, 'note' => null, 'error' => null, 'carrier_id' => null];
+        return ['ok' => true, 'note' => null, 'error' => null, 'carrier_id' => null, 'callsign' => null];
     }
 
     $carrierId = fc_squadron_bind($squadronId, $sc);
@@ -115,6 +118,7 @@ function fc_squadron_sync(array $user, array $link, string $token, ?string $ts =
             'ok' => false,
             'error' => null,
             'carrier_id' => null,
+            'callsign' => $callsign,
             'note' => 'Squadron ' . (string) ($squadron['tag'] ?? $squadronId) . ' has a carrier, but Frontier does'
                 . ' not put an id on it, so which one it is has to be established another way — see your Frontier'
                 . ' links in settings.',
@@ -123,7 +127,7 @@ function fc_squadron_sync(array $user, array $link, string $token, ?string $ts =
 
     fc_squadron_apply($carrierId, $squadron, $sc, $ts);
 
-    return ['ok' => true, 'note' => null, 'error' => null, 'carrier_id' => $carrierId];
+    return ['ok' => true, 'note' => null, 'error' => null, 'carrier_id' => $carrierId, 'callsign' => $callsign];
 }
 
 /**
