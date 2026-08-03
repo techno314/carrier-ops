@@ -42,6 +42,23 @@ function fc_handle_admin_post(string $action, array $admin): void
         }
         return;
     }
+    if ($action === 'admin_spool_test') {
+        // A deliberately inert journal line: it parses, it is counted, and it
+        // changes nothing. The point is to watch an upload go into the queue
+        // and come out again, not to alter a carrier.
+        $body = json_encode([
+            'timestamp' => gmdate('c'),
+            'event' => 'Music',
+            'MusicTrack' => 'MainMenu',
+        ], JSON_UNESCAPED_SLASHES);
+
+        fc_flash(fc_spool_add($admin, 'test', 'test-upload.log', $body)
+            ? 'Test upload queued. It will be applied on the next run, or use "Apply them now" once the board is open.'
+            : 'Could not write to the spool. Check that the app directory is writable.',
+            'ok');
+        return;
+    }
+
     if ($action === 'admin_spool_drain') {
         $r = fc_spool_drain();
         fc_flash($r['applied'] === 0 && $r['failed'] === 0
@@ -248,14 +265,15 @@ function fc_render_admin(array $admin): void
                   : 'These arrived while the board was closed and will be applied when it reopens.' ?>
             <?php endif; ?>
 
-            <?php if ($maintenance === null && $spoolFiles > 0): ?>
-              <form method="post" style="margin-top:8px">
-                <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
-                <div class="actions" style="margin-top:0">
+            <form method="post" style="margin-top:8px">
+              <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+              <div class="actions" style="margin-top:0">
+                <?php if ($maintenance === null && $spoolFiles > 0): ?>
                   <button class="btn ghost sm" type="submit" name="action" value="admin_spool_drain">Apply them now</button>
-                </div>
-              </form>
-            <?php endif; ?>
+                <?php endif; ?>
+                <button class="btn ghost sm" type="submit" name="action" value="admin_spool_test">Queue a test upload</button>
+              </div>
+            </form>
           </div>
         <?php endif; ?>
 
