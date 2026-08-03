@@ -113,7 +113,6 @@ function fc_ingest_text(string $text, array $user, string $filename, string $sou
         // been applied, so neither belongs in the per-event pass above.
         fc_webhook_check_finance((int) $carrierId);
         fc_webhook_board_refresh((int) $carrierId);
-        fc_webhook_summarise_burst((int) $carrierId);
     }
     fc_webhook_flush_after_response();
 

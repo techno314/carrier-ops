@@ -162,6 +162,10 @@ try {
     fc_exec('DELETE FROM fc_capi_pending WHERE created_at < (UTC_TIMESTAMP() - INTERVAL 1 HOUR)');
     fc_exec('DELETE FROM fc_password_resets WHERE expires_at < (UTC_TIMESTAMP() - INTERVAL 7 DAY)');
     fc_exec('DELETE FROM fc_buyers WHERE fetched_at < (UTC_TIMESTAMP() - INTERVAL 7 DAY)');
+    fc_exec(
+        'DELETE FROM fc_activity WHERE ts < (UTC_TIMESTAMP() - INTERVAL :d DAY)',
+        ['d' => FC_ACTIVITY_KEEP_DAYS],
+    );
     $log('housekeeping done');
 } catch (Throwable $e) {
     $counts['errors']++;

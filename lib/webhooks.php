@@ -5,17 +5,16 @@ declare(strict_types=1);
 /**
  * Announcing carrier activity to Discord.
  *
- * Two different things share this file, because they share a delivery path:
+ * One message per carrier, edited in place -- never a stream of posts. The
+ * board carries the carrier's current state and the last few things that have
+ * happened to it, and every change rewrites that same message.
  *
- *   Notices      one post per thing that happened -- a jump scheduled, an
- *                arrival, docking access changed. These accumulate in the
- *                channel as a history.
+ * It began the other way, with a separate post per event alongside the board,
+ * and a channel watching an active carrier turned into a wall of one-line
+ * messages with the useful summary buried somewhere above. So events are
+ * recorded in fc_activity and rendered *into* the board instead.
  *
- *   Status board a single message that is *edited* rather than reposted, so a
- *                channel can hold one always-current summary of the carrier
- *                without a hundred stale copies of it above.
- *
- * The board is the reason anything here keeps message ids. A webhook POST
+ * That is why any of this keeps message ids. A webhook POST
  * normally answers `204 No Content` and tells you nothing about what it just
  * created; posting to `...?wait=true` instead returns the message object, and
  * its `id` is what later `PATCH .../messages/{id}` calls need. Discord places
@@ -62,15 +61,11 @@ const FC_DISCORD_TIMEOUT = 8;
  */
 const FC_WEBHOOK_MAX_AGE_SECONDS = 6 * 3600;
 
-/**
- * Notices a single upload may queue before it is treated as a backfill.
- *
- * The age guard above catches old journals. This catches the other case: a
- * genuinely busy session, or a clock that disagrees with ours. Past this many
- * the individual notices are dropped in favour of one summary, so the worst a
- * webhook can do to a channel is one message per upload.
- */
-const FC_WEBHOOK_MAX_PER_INGEST = 8;
+/** Lines of history the board shows, newest first. */
+const FC_ACTIVITY_SHOWN = 6;
+
+/** How long an entry is kept before housekeeping drops it. */
+const FC_ACTIVITY_KEEP_DAYS = 30;
 
 /** Consecutive failures before a webhook is switched off and left for its owner. */
 const FC_WEBHOOK_MAX_FAILS = 10;
@@ -169,48 +164,50 @@ function fc_webhooks_for(int $carrierId, string $kind): array
 }
 
 /**
- * How many notices this request has queued.
+ * Record something that happened, for the board to show.
  *
- * Static rather than a column: the cap is per upload, and an upload is exactly
- * one request.
+ * `$dedupeKey` must identify the *thing that happened*, not the moment it was
+ * noticed: the same jump seen again in a re-uploaded journal has to collide
+ * with the row already here, or it shows up in the history twice.
  */
-function fc_webhook_counter(bool $increment = false): int
+function fc_activity_log(int $carrierId, string $kind, string $dedupeKey, string $text, ?string $ts = null): void
 {
-    static $count = 0;
-    if ($increment) {
-        $count++;
-    }
-    return $count;
+    fc_exec(
+        'INSERT IGNORE INTO fc_activity (carrier_id, ts, kind, text, dedupe_hash, created_at)
+         VALUES (:cid, :ts, :kind, :text, :hash, UTC_TIMESTAMP())',
+        [
+            'cid' => $carrierId,
+            'ts' => $ts ?? gmdate('Y-m-d H:i:s'),
+            'kind' => $kind,
+            'text' => mb_substr($text, 0, 255),
+            'hash' => sha1($carrierId . '|' . $kind . '|' . $dedupeKey),
+        ],
+    );
 }
 
 /**
- * Put one notice in the queue for every webhook that asked for this kind.
+ * The recent history one webhook should be shown.
  *
- * `$dedupeKey` must identify the *thing that happened*, not the moment we
- * noticed it: the same jump seen again in a re-uploaded journal has to collide
- * with the row already sitting here, or the channel gets it twice.
+ * Filtered by that webhook's own subscriptions, so the per-kind checkboxes
+ * still decide something now that everything shares a single message.
+ *
+ * @return array<int,array>
  */
-function fc_webhook_notify(int $carrierId, string $kind, string $dedupeKey, array $embed): void
+function fc_activity_for(int $carrierId, array $kinds): array
 {
-    $hooks = fc_webhooks_for($carrierId, $kind);
-    if ($hooks === []) {
-        return;
+    $kinds = array_values(array_intersect(array_keys(fc_webhook_kinds()), $kinds));
+    if ($kinds === []) {
+        return [];
     }
-
-    if (fc_webhook_counter() >= FC_WEBHOOK_MAX_PER_INGEST) {
-        fc_webhook_counter(true);   // keep counting, so the summary knows the total
-        return;
-    }
-    fc_webhook_counter(true);
-
-    foreach ($hooks as $hook) {
-        fc_webhook_enqueue(
-            (int) $hook['id'],
-            $kind,
-            ['embeds' => [$embed]],
-            sha1($hook['id'] . '|' . $kind . '|' . $dedupeKey),
-        );
-    }
+    $in = implode(',', array_fill(0, count($kinds), '?'));
+    $stmt = fc_db()->prepare(
+        "SELECT ts, kind, text FROM fc_activity
+          WHERE carrier_id = ? AND kind IN ({$in})
+          ORDER BY ts DESC, id DESC
+          LIMIT " . FC_ACTIVITY_SHOWN
+    );
+    $stmt->execute(array_merge([$carrierId], $kinds));
+    return $stmt->fetchAll();
 }
 
 function fc_webhook_enqueue(int $webhookId, string $kind, array $payload, string $dedupeHash): void
@@ -232,43 +229,6 @@ function fc_webhook_enqueue(int $webhookId, string $kind, array $payload, string
     );
 }
 
-/**
- * If an upload tripped the burst cap, say so once instead of not at all.
- *
- * Called at the end of an ingest, when the final count is known.
- */
-function fc_webhook_summarise_burst(int $carrierId): void
-{
-    $total = fc_webhook_counter();
-    if ($total <= FC_WEBHOOK_MAX_PER_INGEST) {
-        return;
-    }
-
-    $carrier = fc_carrier($carrierId);
-    if ($carrier === null) {
-        return;
-    }
-    $dropped = $total - FC_WEBHOOK_MAX_PER_INGEST;
-
-    foreach (fc_all('SELECT * FROM fc_webhooks WHERE carrier_id = :cid AND enabled = 1', ['cid' => $carrierId]) as $hook) {
-        fc_webhook_enqueue(
-            (int) $hook['id'],
-            'summary',
-            ['embeds' => [[
-                'title' => fc_webhook_carrier_title($carrier),
-                'description' => 'A large upload was processed. ' . number_format($dropped)
-                    . ' further ' . ($dropped === 1 ? 'notice was' : 'notices were')
-                    . ' suppressed to keep this channel readable.',
-                'color' => 0x6b7280,
-                'url' => fc_carrier_link($carrier),
-                'timestamp' => gmdate('c'),
-            ]]],
-            // One per webhook per minute at most, whatever the upload contained.
-            sha1($hook['id'] . '|summary|' . gmdate('Y-m-d H:i')),
-        );
-    }
-}
-
 function fc_webhook_carrier_title(array $carrier): string
 {
     $name = fc_discord_escape($carrier['name'] ?? null);
@@ -287,11 +247,15 @@ function fc_webhook_carrier_title(array $carrier): string
 // ---------------------------------------------------------------------------
 
 /**
- * Build and queue whatever this event is worth saying.
+ * Record whatever this event is worth remembering.
  *
  * `$before` is the carrier row as it was when the event arrived and `$carrier`
  * as it is now, which is how a fuel level crossing a threshold can be told
  * apart from one that was already below it.
+ *
+ * Lines are written for every kind regardless of who is subscribed; the
+ * filtering happens when a board is rendered, since two webhooks on one
+ * carrier may want different things.
  */
 function fc_webhook_on_event(array $carrier, ?array $before, array $event, string $name, ?string $ts): void
 {
@@ -301,9 +265,7 @@ function fc_webhook_on_event(array $carrier, ?array $before, array $event, strin
     }
 
     $id = (int) $carrier['id'];
-    $title = fc_webhook_carrier_title($carrier);
-    $link = fc_carrier_link($carrier);
-    $base = ['title' => $title, 'url' => $link, 'timestamp' => gmdate('c', (int) strtotime($ts . ' UTC'))];
+    $log = static fn(string $kind, string $key, string $text) => fc_activity_log($id, $kind, $key, $text, $ts);
 
     switch ($name) {
         case 'CarrierJumpRequest':
@@ -312,56 +274,40 @@ function fc_webhook_on_event(array $carrier, ?array $before, array $event, strin
             $arrival = strtotime((string) ($event['DepartureTime'] ?? '')) ?: null;
             // DepartureTime names the moment the carrier *arrives*, not the
             // moment it leaves -- confirmed against a jump whose CarrierLocation
-            // landed on the same second. Wording it as departure here would be
+            // landed on the same second. Wording it as departure would be
             // repeating Frontier's mistake into somebody's channel.
-            $when = $arrival === null ? '' : "\nArrives <t:{$arrival}:R>, at <t:{$arrival}:t>.";
-            fc_webhook_notify($id, 'jump.scheduled', 'jumpreq|' . $system . '|' . ($event['DepartureTime'] ?? $ts), $base + [
-                'description' => '**Jump plotted to ' . fc_discord_escape($system) . '**'
-                    . ($body === null ? '' : "\nBody: " . fc_discord_escape((string) $body)) . $when,
-                'color' => 0x3b82f6,
-            ]);
+            $log('jump.scheduled', 'jumpreq|' . $system . '|' . ($event['DepartureTime'] ?? $ts),
+                'Jump plotted to **' . fc_discord_escape($system) . '**'
+                . ($body === null ? '' : ' (' . fc_discord_escape((string) $body) . ')')
+                . ($arrival === null ? '' : ', arriving <t:' . $arrival . ':R>'));
             return;
 
         case 'CarrierJumpCancelled':
-            fc_webhook_notify($id, 'jump.cancelled', 'jumpcancel|' . $ts, $base + [
-                'description' => '**Jump cancelled.**',
-                'color' => 0xf59e0b,
-            ]);
+            $log('jump.cancelled', 'jumpcancel|' . $ts, 'Jump cancelled.');
             return;
 
         case 'CarrierJump':
             $system = (string) ($event['StarSystem'] ?? ($event['SystemName'] ?? '?'));
             $body = $event['Body'] ?? null;
-            fc_webhook_notify($id, 'jump.completed', 'arrive|' . $system . '|' . $ts, $base + [
-                'description' => '**Arrived in ' . fc_discord_escape($system) . '**'
-                    . ($body === null ? '' : "\nBody: " . fc_discord_escape((string) $body)),
-                'color' => 0x22c55e,
-                'fields' => array_values(array_filter([
-                    $carrier['fuel_level'] === null ? null
-                        : ['name' => 'Tritium', 'value' => fc_num((int) $carrier['fuel_level']) . ' t', 'inline' => true],
-                    ['name' => 'Docking', 'value' => fc_docking_label($carrier['docking_access']), 'inline' => true],
-                ])),
-            ]);
+            $log('jump.completed', 'arrive|' . $system . '|' . $ts,
+                'Arrived in **' . fc_discord_escape($system) . '**'
+                . ($body === null ? '' : ' (' . fc_discord_escape((string) $body) . ')'));
             return;
 
         case 'CarrierDockingPermission':
             $access = fc_docking_label($event['DockingAccess'] ?? null);
             $notorious = !empty($event['AllowNotorious']);
-            fc_webhook_notify($id, 'docking', 'docking|' . ($event['DockingAccess'] ?? '') . '|' . (int) $notorious . '|' . $ts, $base + [
-                'description' => '**Docking access is now ' . $access . '**'
-                    . "\nNotorious commanders " . ($notorious ? 'are' : 'are not') . ' permitted.',
-                'color' => 0x8b5cf6,
-            ]);
+            $log('docking', 'docking|' . ($event['DockingAccess'] ?? '') . '|' . (int) $notorious . '|' . $ts,
+                'Docking access set to **' . $access . '**'
+                . ($notorious ? ', notorious permitted' : ''));
             return;
 
         case 'CarrierDepositFuel':
             $total = isset($event['Total']) ? (int) $event['Total'] : null;
             $amount = isset($event['Amount']) ? (int) $event['Amount'] : null;
-            fc_webhook_notify($id, 'fuel', 'fuel|' . $ts . '|' . (string) $amount, $base + [
-                'description' => '**' . ($amount === null ? 'Tritium deposited' : fc_num($amount) . ' t of tritium deposited') . '**'
-                    . ($total === null ? '' : "\nReserve now " . fc_num($total) . ' t.'),
-                'color' => 0x14b8a6,
-            ]);
+            $log('fuel', 'fuel|' . $ts . '|' . (string) $amount,
+                ($amount === null ? 'Tritium deposited' : fc_num($amount) . ' t of tritium deposited')
+                . ($total === null ? '' : ', reserve now ' . fc_num($total) . ' t'));
             return;
 
         case 'CarrierTradeOrder':
@@ -374,62 +320,42 @@ function fc_webhook_on_event(array $carrier, ?array $before, array $event, strin
             $sale = (int) ($event['SaleOrder'] ?? 0);
 
             if (!empty($event['CancelTrade'])) {
-                $line = '**Order cancelled: ' . fc_discord_escape((string) $commodity) . '**';
-                $colour = 0x6b7280;
-                $key = 'cancel';
+                $log('orders', 'order|' . $commodity . '|cancel|' . $price,
+                    'Order cancelled: ' . fc_discord_escape((string) $commodity));
             } elseif ($purchase > 0) {
-                $line = '**Buying ' . fc_num($purchase) . ' t of ' . fc_discord_escape((string) $commodity) . '**'
-                    . "\n" . fc_cr($price) . ' cr per tonne.';
-                $colour = 0x3b82f6;
-                $key = 'buy|' . $purchase;
+                $log('orders', 'order|' . $commodity . '|buy|' . $purchase . '|' . $price,
+                    'Buying ' . fc_num($purchase) . ' t of ' . fc_discord_escape((string) $commodity)
+                    . ' at ' . fc_cr($price) . ' cr');
             } elseif ($sale > 0) {
-                $line = '**Selling ' . fc_num($sale) . ' t of ' . fc_discord_escape((string) $commodity) . '**'
-                    . "\n" . fc_cr($price) . ' cr per tonne.';
-                $colour = 0x22c55e;
-                $key = 'sell|' . $sale;
-            } else {
-                return;
+                $log('orders', 'order|' . $commodity . '|sell|' . $sale . '|' . $price,
+                    'Selling ' . fc_num($sale) . ' t of ' . fc_discord_escape((string) $commodity)
+                    . ' at ' . fc_cr($price) . ' cr');
             }
-
-            fc_webhook_notify($id, 'orders', 'order|' . $commodity . '|' . $key . '|' . $price, $base + [
-                'description' => $line,
-                'color' => $colour,
-            ]);
             return;
 
         case 'CarrierDecommission':
-            fc_webhook_notify($id, 'decommission', 'decom|' . $ts, $base + [
-                'description' => '**Decommission scheduled.**'
-                    . (isset($event['ScrapRefund']) ? "\nRefund: " . fc_cr((int) $event['ScrapRefund']) . ' cr.' : ''),
-                'color' => 0xef4444,
-            ]);
+            $log('decommission', 'decom|' . $ts, '**Decommission scheduled.**');
             return;
 
         case 'CarrierCancelDecommission':
-            fc_webhook_notify($id, 'decommission', 'decomcancel|' . $ts, $base + [
-                'description' => '**Decommission cancelled.** The carrier stays.',
-                'color' => 0x22c55e,
-            ]);
+            $log('decommission', 'decomcancel|' . $ts, 'Decommission cancelled.');
             return;
 
         case 'CarrierStats':
             // Only worth a word on the way *down* past the threshold: a carrier
-            // that sits at 80 t would otherwise announce it on every upload.
+            // sitting at 80 t would otherwise say so on every upload.
             $now = $carrier['fuel_level'] === null ? null : (int) $carrier['fuel_level'];
             $was = ($before['fuel_level'] ?? null) === null ? null : (int) $before['fuel_level'];
             if ($now !== null && $now <= FC_WEBHOOK_LOW_FUEL && ($was === null || $was > FC_WEBHOOK_LOW_FUEL)) {
-                fc_webhook_notify($id, 'fuel', 'lowfuel|' . intdiv($now, 10), $base + [
-                    'description' => '**Tritium low: ' . fc_num($now) . ' t**'
-                        . "\nRoughly " . max(0, intdiv($now, 5)) . ' jumps of reserve at 5 t each.',
-                    'color' => 0xf59e0b,
-                ]);
+                $log('fuel', 'lowfuel|' . intdiv($now, 10),
+                    '⚠️ Tritium low: **' . fc_num($now) . ' t**');
             }
             return;
     }
 }
 
 /**
- * Warn when the balance will not cover the next upkeep tick.
+ * Note when the balance will not cover the next upkeep tick.
  *
  * Kept apart from the event switch because it is a *state* worth reporting
  * rather than something that happened, and it is only knowable once finance
@@ -437,9 +363,6 @@ function fc_webhook_on_event(array $carrier, ?array $before, array $event, strin
  */
 function fc_webhook_check_finance(int $carrierId): void
 {
-    if (fc_webhooks_for($carrierId, 'finance') === []) {
-        return;
-    }
     $carrier = fc_carrier($carrierId);
     if ($carrier === null || $carrier['balance'] === null) {
         return;
@@ -455,31 +378,19 @@ function fc_webhook_check_finance(int $carrierId): void
     }
 
     $tick = fc_next_upkeep_tick();
-    fc_webhook_notify($carrierId, 'finance', 'solvency|' . $weeks . '|' . gmdate('Y-W'), [
-        'title' => fc_webhook_carrier_title($carrier),
-        'url' => fc_carrier_link($carrier),
-        'timestamp' => gmdate('c'),
-        'description' => $weeks < 1
-            ? "**Upkeep is not covered.**\nThe next charge is <t:{$tick}:R> and the balance will not meet it."
-            : '**Upkeep is covered for about ' . $weeks . ' more ' . ($weeks === 1 ? 'week' : 'weeks') . ".**\nNext charge <t:{$tick}:R>.",
-        'color' => $weeks < 1 ? 0xef4444 : 0xf59e0b,
-        'fields' => [
-            ['name' => 'Weekly upkeep', 'value' => fc_cr($upkeep['total']) . ' cr', 'inline' => true],
-        ],
-    ]);
+
+    // Once per week at most, however many times the figure is recalculated.
+    fc_activity_log(
+        $carrierId,
+        'finance',
+        'solvency|' . $weeks . '|' . gmdate('Y-W'),
+        $weeks < 1
+            ? '⚠️ **Upkeep is not covered** — next charge <t:' . $tick . ':R>'
+            : '⚠️ Upkeep covered for about **' . $weeks . ' more week' . ($weeks === 1 ? '' : 's')
+                . '** — next charge <t:' . $tick . ':R>',
+    );
 }
 
-// ---------------------------------------------------------------------------
-// The status board
-// ---------------------------------------------------------------------------
-
-/**
- * Rebuild the always-current summary and queue an edit if it changed.
- *
- * `board_hash` is what makes this cheap to call after every upload: an upload
- * that moved nothing produces the same board, and an unchanged board is not
- * worth a request to Discord.
- */
 function fc_webhook_board_refresh(int $carrierId): void
 {
     $hooks = fc_all(
@@ -495,7 +406,11 @@ function fc_webhook_board_refresh(int $carrierId): void
     }
 
     foreach ($hooks as $hook) {
-        $embed = fc_webhook_board_embed($carrier, (int) $hook['show_finance'] === 1);
+        $embed = fc_webhook_board_embed(
+            $carrier,
+            (int) $hook['show_finance'] === 1,
+            array_filter(explode(',', (string) $hook['events'])),
+        );
         $payload = ['embeds' => [$embed]];
 
         // Hash what the board *says*, not when it was built. The embed carries
@@ -514,7 +429,7 @@ function fc_webhook_board_refresh(int $carrierId): void
     }
 }
 
-function fc_webhook_board_embed(array $carrier, bool $withFinance): array
+function fc_webhook_board_embed(array $carrier, bool $withFinance, array $kinds = []): array
 {
     $fields = [];
 
@@ -564,6 +479,25 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
             'name' => 'Upkeep',
             'value' => fc_cr($upkeep['total']) . ' cr/wk' . ($span === null ? '' : "\n" . $span . ' covered'),
             'inline' => true,
+        ];
+    }
+
+    // The history, newest first. This is what used to be a separate message per
+    // event; folding it in here is the whole point of the board.
+    $recent = fc_activity_for((int) $carrier['id'], $kinds);
+    if ($recent !== []) {
+        $lines = [];
+        foreach ($recent as $row) {
+            $at = strtotime((string) $row['ts'] . ' UTC');
+            $lines[] = '<t:' . $at . ':R> — ' . $row['text'];
+        }
+        $fields[] = [
+            'name' => 'Recent',
+            // Full width: these are sentences, and two columns of them wrap
+            // into an unreadable mess.
+            'value' => mb_substr(implode("
+", $lines), 0, 1024),
+            'inline' => false,
         ];
     }
 
@@ -860,7 +794,9 @@ function fc_handle_webhook_post(string $action, array $carrier): void
                 'url' => $url,
                 'events' => $chosenKinds() ?: implode(',', fc_webhook_default_kinds()),
                 'fin' => isset($_POST['show_finance']) ? 1 : 0,
-                'board' => isset($_POST['board_enabled']) ? 1 : 0,
+                // The board is the only thing a webhook posts now, so it is
+                // always on; the column stays for the sake of older rows.
+                'board' => 1,
             ],
         );
         fc_webhook_board_refresh($carrierId);
@@ -885,7 +821,7 @@ function fc_handle_webhook_post(string $action, array $carrier): void
                 'label' => mb_substr(trim((string) ($_POST['label'] ?? '')), 0, 64) ?: null,
                 'events' => $chosenKinds(),
                 'fin' => isset($_POST['show_finance']) ? 1 : 0,
-                'board' => isset($_POST['board_enabled']) ? 1 : 0,
+                'board' => 1,
                 // Saving is also how a webhook disabled by repeated failures is
                 // put back into service, so the counters are cleared above.
                 'on' => isset($_POST['enabled']) ? 1 : 0,

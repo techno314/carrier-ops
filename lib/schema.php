@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 10;
+const FC_SCHEMA_VERSION = 11;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -524,6 +524,29 @@ function fc_schema_statements(): array
             created_at DATETIME NOT NULL,
             UNIQUE KEY fc_resets_token (token_hash),
             KEY fc_resets_user (user_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // What has happened to a carrier lately, in the words the Discord
+        // board shows.
+        //
+        // These used to be separate messages, one per event, which is how a
+        // channel ends up as a wall of one-line posts nobody scrolls back
+        // through. The board is a single message that gets edited, so the
+        // history has to live somewhere it can be re-rendered from -- here.
+        //
+        // dedupe_hash identifies the thing that happened rather than the
+        // moment it was noticed, so re-uploading a journal does not double an
+        // entry.
+        "CREATE TABLE IF NOT EXISTS fc_activity (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            carrier_id BIGINT UNSIGNED NOT NULL,
+            ts DATETIME NOT NULL,
+            kind VARCHAR(32) NOT NULL,
+            text VARCHAR(255) NOT NULL,
+            dedupe_hash CHAR(40) NOT NULL,
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY fc_activity_dedupe (dedupe_hash),
+            KEY fc_activity_carrier (carrier_id, ts)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // A Discord webhook the owner has pointed at one of their carriers.

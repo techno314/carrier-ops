@@ -728,7 +728,8 @@ case 'manage':
     <div class="card">
       <h2>Discord</h2>
       <p class="muted small">
-        Post this carrier's activity to a Discord channel. Create the webhook in Discord under
+        Keep a live summary of this carrier in a Discord channel — one message, edited as things change, rather
+        than a stream of posts. Create the webhook in Discord under
         <em>Edit Channel → Integrations → Webhooks</em>, then paste its URL here. The URL is the only
         credential involved, so treat it like a password — anyone holding it can post to that channel.
       </p>
@@ -769,6 +770,7 @@ case 'manage':
                    value="<?= fc_e($hook['label'] ?? '') ?>" placeholder="Squadron channel">
           </div>
 
+          <p class="small muted" style="margin-bottom:0">What to list under <em>Recent</em> on the board:</p>
           <div class="checks">
             <?php foreach ($kinds as $kind => $spec): ?>
               <div class="check">
@@ -782,14 +784,11 @@ case 'manage':
             <?php endforeach; ?>
           </div>
 
-          <div class="check">
-            <input type="checkbox" id="board<?= (int) $hook['id'] ?>" name="board_enabled" <?= (int) $hook['board_enabled'] === 1 ? 'checked' : '' ?>>
-            <label for="board<?= (int) $hook['id'] ?>">
-              Keep a status board in the channel
-              <span class="dim small">One message showing where the carrier is now, edited in place rather than
-                reposted. <?= $hook['board_message_id'] === null ? 'Not posted yet.' : 'Posted — pin it so it stays findable.' ?></span>
-            </label>
-          </div>
+          <p class="small dim">
+            <?= $hook['board_message_id'] === null
+                ? 'No message posted yet — one appears the next time anything changes.'
+                : 'Posted and being edited in place. Pin it so it stays findable.' ?>
+          </p>
           <div class="check">
             <input type="checkbox" id="fin<?= (int) $hook['id'] ?>" name="show_finance" <?= (int) $hook['show_finance'] === 1 ? 'checked' : '' ?>>
             <label for="fin<?= (int) $hook['id'] ?>">
@@ -829,6 +828,7 @@ case 'manage':
             <input id="newlabel" name="label" type="text" maxlength="64" placeholder="Squadron channel">
           </div>
 
+          <p class="small muted" style="margin-bottom:0">What to list under <em>Recent</em> on the board:</p>
           <div class="checks">
             <?php foreach ($kinds as $kind => $spec): ?>
               <div class="check">
@@ -842,19 +842,15 @@ case 'manage':
             <?php endforeach; ?>
           </div>
 
-          <div class="check">
-            <input type="checkbox" id="newboard" name="board_enabled" checked>
-            <label for="newboard">Keep a status board in the channel</label>
-          </div>
-
           <div class="actions"><button class="btn" type="submit">Add webhook</button></div>
         </form>
       <?php endif; ?>
 
       <p class="small dim" style="margin-bottom:0">
-        Notices are queued and sent after your upload finishes, so nothing waits on Discord. Journals older than
-        six hours are ingested silently — uploading a backlog fills in the history here without announcing
-        journeys that ended weeks ago.
+        One message per carrier, edited in place — the channel never fills up, and the newest state is always the
+        message you are already looking at. Edits are sent after your upload finishes, so nothing waits on Discord.
+        Journals older than six hours are ingested silently, so uploading a backlog fills in the board without
+        rewriting it with journeys that ended weeks ago.
       </p>
     </div>
 
