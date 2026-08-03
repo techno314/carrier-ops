@@ -294,6 +294,14 @@ form.inline { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: 
 .carriercard h2 a { color: var(--text); }
 .carriercard h2 a:hover { color: var(--accent); }
 .carriercard .actions { margin-top: 14px; }
+/*
+ * Two columns, not auto-fit. The grid draws its own background and lets it
+ * show through the 1px gaps, so any cell without a .stat in it becomes a grey
+ * panel rather than nothing. A card carries exactly four stats and fits three
+ * across, which left the fourth alone on a row beside two empty cells.
+ */
+.carriercard .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 420px) { .carriercard .stats { grid-template-columns: 1fr; } }
 .carriercard.needsattention { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
 
 /* ---- badges ------------------------------------------------------------ */
