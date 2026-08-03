@@ -164,11 +164,22 @@ function fc_render_admin(array $admin): void
         'SELECT u.*,
                 (SELECT COUNT(*) FROM fc_carriers c WHERE c.owner_user_id = u.id) AS carriers,
                 (SELECT COUNT(*) FROM fc_uploads p WHERE p.user_id = u.id) AS uploads,
-                (SELECT MAX(p.ts) FROM fc_uploads p WHERE p.user_id = u.id) AS last_upload,
+                -- Deliberately not every upload row. The cron fetches Frontier
+                -- for every linked account every fifteen minutes and logs each
+                -- one, so a plain MAX(ts) reports when the server last polled
+                -- rather than when the person was last here, which made every
+                -- account show the same last-seen time a few minutes ago.
+                -- The excluded source is bound rather than written inline for
+                -- the same reason the ids above are joined in PHP: a quoted
+                -- literal cannot appear in a single-quoted PHP string without
+                -- ending it, and the rest of the SQL then becomes an argument.
+                (SELECT MAX(p.ts) FROM fc_uploads p
+                  WHERE p.user_id = u.id AND p.source <> :server) AS last_activity,
                 (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id) AS links,
                 (SELECT COUNT(*) FROM fc_capi_tokens k WHERE k.user_id = u.id AND k.needs_reauth = 1) AS links_stale
            FROM fc_users u
           ORDER BY u.created_at DESC',
+        ['server' => 'capi'],
     );
 
     foreach ($users as &$row) {
@@ -323,8 +334,13 @@ function fc_render_admin(array $admin): void
                 <td class="num"><?= (int) $u['carriers'] ?></td>
                 <td class="num"><?= (int) $u['uploads'] ?></td>
                 <td class="small muted nowrap">
-                  <?= $u['last_upload'] !== null ? fc_e(fc_ago($u['last_upload']))
-                      : ($u['last_login'] !== null ? fc_e(fc_ago($u['last_login'])) : '—') ?>
+                  <?php
+                  // Whichever happened later: signing in, or sending data. Both
+                  // are the person being here, and taking only one of them
+                  // understates someone who does mostly the other.
+                  $seen = max((string) ($u['last_activity'] ?? ''), (string) ($u['last_login'] ?? ''));
+                  ?>
+                  <?= $seen !== '' ? fc_e(fc_ago($seen)) : '—' ?>
                 </td>
                 <td>
                   <?php if ((int) $u['is_banned'] === 1): ?><span class="badge bad">Suspended</span><?php endif; ?>
