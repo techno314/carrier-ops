@@ -156,6 +156,136 @@ function fc_webhook_board_refresh(int $carrierId): void
 }
 
 /**
+ * Short names for the services a visitor cares about.
+ *
+ * Frontier's own labels are written for the owner's management screen -- a
+ * dock full of "Universal Cartographics" and "Redemption Office" is a wall of
+ * text in an embed. These are what the thing is called when you are deciding
+ * whether it is worth flying there. Bridge Crew is absent on purpose: every
+ * carrier has one and nobody visits for it.
+ */
+function fc_board_service_label(string $role): ?string
+{
+    return [
+        'Refuel' => 'Refuel',
+        'Repair' => 'Repair',
+        'Rearm' => 'Rearm',
+        'Shipyard' => 'Shipyard',
+        'Outfitting' => 'Outfitting',
+        'Commodities' => 'Commodities',
+        'BlackMarket' => 'Black market',
+        'Bartender' => 'Bar',
+        'Exploration' => 'Cartographics',
+        'VistaGenomics' => 'Vista Genomics',
+        'VoucherRedemption' => 'Redemption',
+        'CarrierFuel' => 'Tritium depot',
+        'PioneerSupplies' => 'Pioneer supplies',
+    ][$role] ?? null;
+}
+
+/**
+ * The services line, with stock counts attached to the two that have any.
+ *
+ * "Shipyard" and "Outfitting" mean little on their own -- the question is
+ * always whether anything is in them -- so the number rides along with the
+ * name rather than taking a field of its own.
+ */
+function fc_board_services(int $carrierId): string
+{
+    $ships = (int) (fc_one('SELECT COUNT(*) n FROM fc_shipyard WHERE carrier_id = :i', ['i' => $carrierId])['n'] ?? 0);
+    $modules = (int) (fc_one('SELECT COUNT(*) n FROM fc_outfitting WHERE carrier_id = :i', ['i' => $carrierId])['n'] ?? 0);
+
+    $out = [];
+    foreach (fc_all('SELECT * FROM fc_crew WHERE carrier_id = :i', ['i' => $carrierId]) as $row) {
+        if ((int) $row['activated'] !== 1 || (int) $row['enabled'] !== 1) {
+            continue;   // not installed, or suspended: not a service anyone can use
+        }
+        $label = fc_board_service_label((string) $row['crew_role']);
+        if ($label === null) {
+            continue;
+        }
+        if ($row['crew_role'] === 'Shipyard' && $ships > 0) {
+            $label .= ' (' . fc_num($ships) . ')';
+        }
+        if ($row['crew_role'] === 'Outfitting' && $modules > 0) {
+            $label .= ' (' . fc_num($modules) . ')';
+        }
+        $out[] = $label;
+    }
+
+    sort($out);
+    return implode(' · ', $out);
+}
+
+/**
+ * What the carrier charges, as a visitor would ask it.
+ *
+ * Only the rates that cost anything are named. A carrier that charges nothing
+ * says so outright, because "no taxes" is the thing people are hoping to read
+ * and a row of five zeroes buries it.
+ */
+function fc_board_taxes(array $carrier): string
+{
+    $rates = [
+        'Refuel' => $carrier['tax_refuel'],
+        'Repair' => $carrier['tax_repair'],
+        'Rearm' => $carrier['tax_rearm'],
+        'Shipyard' => $carrier['tax_shipyard'],
+        'Outfitting' => $carrier['tax_outfitting'],
+    ];
+
+    // Older carriers had one rate for everything, and old journals still carry
+    // it; it stands in when the per-service ones were never reported.
+    if (count(array_filter($rates, static fn($v) => $v !== null)) === 0) {
+        $flat = $carrier['tax_rate'];
+        if ($flat === null) {
+            return '';
+        }
+        return (int) $flat === 0 ? 'None' : (int) $flat . '% on everything';
+    }
+
+    $charged = [];
+    foreach ($rates as $label => $rate) {
+        if ($rate !== null && (int) $rate > 0) {
+            $charged[] = $label . ' ' . (int) $rate . '%';
+        }
+    }
+
+    return $charged === [] ? 'None' : implode(' · ', $charged);
+}
+
+/**
+ * What the carrier is buying and selling, best first.
+ *
+ * Standing orders rather than the commodity list: an order is a live offer
+ * with a price and a quantity behind it, which is the thing worth flying to.
+ */
+function fc_board_trading(int $carrierId): string
+{
+    $rows = fc_all(
+        'SELECT * FROM fc_orders WHERE carrier_id = :i ORDER BY kind DESC, amount DESC',
+        ['i' => $carrierId],
+    );
+    if ($rows === []) {
+        return '';
+    }
+
+    $lines = [];
+    foreach (array_slice($rows, 0, 6) as $row) {
+        $name = fc_discord_escape($row['loc_name'] ?: ucfirst((string) $row['commodity']));
+        $lines[] = ((string) $row['kind'] === 'buy' ? '🟢 Buying ' : '🔵 Selling ')
+            . '**' . $name . '** — ' . fc_num((int) $row['amount']) . ' t at '
+            . fc_cr((int) $row['price']) . ' cr'
+            . ((int) $row['black_market'] === 1 ? ' *(black market)*' : '');
+    }
+    if (count($rows) > 6) {
+        $lines[] = '…and ' . (count($rows) - 6) . ' more';
+    }
+
+    return implode("\n", $lines);
+}
+
+/**
  * What the board says.
  *
  * Laid out for the glance it actually gets. The two things anyone opens the
@@ -173,6 +303,22 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
     $lines[] = $system === ''
         ? '📍 Position unknown'
         : '📍 **' . $system . '**' . ($body === '' ? '' : ' · ' . $body);
+
+    // How long it has been parked. The stop has to still be open *and* name the
+    // system the carrier is actually in: a stale open stop from somewhere else
+    // would otherwise report an arrival that never happened here.
+    if ($system !== '') {
+        $stop = fc_one(
+            'SELECT arrival_time FROM fc_itinerary
+              WHERE carrier_id = :cid AND departure_time IS NULL AND system = :sys
+              ORDER BY arrival_time DESC LIMIT 1',
+            ['cid' => $carrier['id'], 'sys' => $carrier['system']],
+        );
+        if ($stop !== null) {
+            $since = strtotime((string) $stop['arrival_time'] . ' UTC');
+            $lines[0] .= ' · here since <t:' . $since . ':R>';
+        }
+    }
 
     $next = fc_one(
         "SELECT * FROM fc_jumps
@@ -198,7 +344,15 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
     $fields = [
         [
             'name' => 'Docking',
-            'value' => fc_docking_label($carrier['docking_access']),
+            // Notorious access belongs with docking rather than in a field of
+            // its own: it is a qualifier on who may dock, and it is the second
+            // thing anyone checks after the first.
+            'value' => fc_docking_label($carrier['docking_access'])
+                . ($carrier['allow_notorious'] === null
+                    ? ''
+                    : ((int) $carrier['allow_notorious'] === 1
+                        ? "\nNotorious welcome"
+                        : "\nNo notorious")),
             'inline' => true,
         ],
         [
@@ -214,6 +368,29 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
             'inline' => true,
         ],
     ];
+
+    // --- what a visitor would want to know --------------------------------
+    //
+    // Full-width rather than inline: these are lists, and a third of an embed
+    // is not enough width for one without it wrapping into nonsense.
+    $services = fc_board_services((int) $carrier['id']);
+    if ($services !== '') {
+        $fields[] = ['name' => 'Services', 'value' => mb_substr($services, 0, 1024), 'inline' => false];
+    }
+
+    $taxes = fc_board_taxes($carrier);
+    if ($taxes !== '') {
+        $fields[] = ['name' => 'Taxes', 'value' => $taxes, 'inline' => false];
+    }
+
+    // The carrier's own market switch decides this, the same as it does on the
+    // website -- one setting, not two that can disagree.
+    if ((int) ($carrier['show_market'] ?? 1) === 1) {
+        $trading = fc_board_trading((int) $carrier['id']);
+        if ($trading !== '') {
+            $fields[] = ['name' => 'Trading', 'value' => mb_substr($trading, 0, 1024), 'inline' => false];
+        }
+    }
 
     // --- and a second row, only when finance is being shown ---------------
     if ($withFinance && $carrier['balance'] !== null) {
@@ -237,6 +414,10 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
         'description' => implode("\n", $lines),
         'color' => ($fuel !== null && $fuel <= FC_WEBHOOK_LOW_FUEL) ? 0xf59e0b : 0x38bdf8,
         'fields' => $fields,
+        // A picture of a Drake-Class, the same one the site uses. Served by
+        // nginx as a static file, so Discord can still fetch it while the
+        // board itself is closed for maintenance.
+        'thumbnail' => ['url' => fc_base_url() . '/fc/assets/carrier-512.jpg'],
         'footer' => ['text' => 'Carrier Ops'],
         'timestamp' => gmdate('c'),
     ];
