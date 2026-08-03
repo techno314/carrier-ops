@@ -289,6 +289,13 @@ form.inline { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: 
 .chart svg { width: 100%; height: 100%; display: block; }
 .chart circle:hover { r: 5; }
 
+/* A carrier on the fleet dashboard. The accent edge is only for the ones with
+   something wrong, so a healthy fleet stays quiet and a problem stands out. */
+.carriercard h2 a { color: var(--text); }
+.carriercard h2 a:hover { color: var(--accent); }
+.carriercard .actions { margin-top: 14px; }
+.carriercard.needsattention { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+
 /* ---- badges ------------------------------------------------------------ */
 
 .badge {

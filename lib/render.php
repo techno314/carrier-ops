@@ -535,3 +535,161 @@ function fc_render_balance_chart(array $carrier): void
     </div>
     <?php
 }
+
+/**
+ * Whether a carrier wants looking at, and why.
+ *
+ * The point of a fleet view is not to show every carrier equally -- it is to
+ * make the one in trouble impossible to miss among the ones that are fine.
+ *
+ * @return string[] short reasons, empty when nothing is wrong
+ */
+function fc_carrier_warnings(array $carrier): array
+{
+    $out = [];
+
+    if ((int) ($carrier['pending_decommission'] ?? 0) === 1) {
+        $out[] = 'Decommission scheduled';
+    }
+
+    $fuel = $carrier['fuel_level'] === null ? null : (int) $carrier['fuel_level'];
+    if ($fuel !== null && $fuel <= 150) {
+        $out[] = 'Tritium low';
+    }
+
+    if ($carrier['balance'] !== null) {
+        $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $carrier['id']]);
+        $solvency = fc_solvency(fc_upkeep($crew, $carrier), (int) $carrier['balance']);
+        if ($solvency['weeks'] !== null && $solvency['weeks'] < 2) {
+            $out[] = $solvency['weeks'] < 1 ? 'Upkeep not covered' : 'Upkeep covered for under two weeks';
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * One carrier, compactly, for a dashboard showing several.
+ *
+ * Deliberately not fc_render_carrier_stats: with one carrier the full spread of
+ * figures is the page, but repeated six times it is a wall, and the question a
+ * fleet view answers is "which of these needs me" rather than "what is the jump
+ * range of each".
+ */
+function fc_render_carrier_card(array $carrier): void
+{
+    $fuel = $carrier['fuel_level'] === null ? null : (int) $carrier['fuel_level'];
+    $fuelPct = fc_pct($fuel, FC_FUEL_CAPACITY);
+    $warnings = fc_carrier_warnings($carrier);
+
+    $next = fc_one(
+        "SELECT system, departure_time FROM fc_jumps
+          WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time > UTC_TIMESTAMP()
+          ORDER BY departure_time ASC LIMIT 1",
+        ['cid' => $carrier['id']],
+    );
+    ?>
+    <div class="card carriercard<?= $warnings === [] ? '' : ' needsattention' ?>">
+      <h2 style="margin-bottom:6px">
+        <a href="<?= fc_e(fc_carrier_link($carrier)) ?>"><?= fc_e(fc_carrier_display_name($carrier)) ?></a>
+        <span class="callsign small"><?= fc_e($carrier['callsign'] ?? '—') ?></span>
+      </h2>
+
+      <p class="muted small" style="margin:0 0 12px">
+        <?= fc_e($carrier['system'] ?? 'Position unknown') ?>
+        <?php if (($carrier['body'] ?? null) !== null && $carrier['body'] !== ''): ?>
+          · <?= fc_e($carrier['body']) ?>
+        <?php endif; ?>
+        · <?= fc_docking_badge($carrier) ?>
+      </p>
+
+      <?php if ($warnings !== []): ?>
+        <div class="banner warn small" style="margin-bottom:12px">
+          <?= fc_e(implode(' · ', $warnings)) ?>
+        </div>
+      <?php endif; ?>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="k">Tritium</div>
+          <div class="v sm"><?= fc_num($fuel) ?> <span class="muted small">/ <?= FC_FUEL_CAPACITY ?> t</span></div>
+          <div class="bar <?= $fuelPct < 10 ? 'danger' : ($fuelPct < 25 ? 'warn' : '') ?>"><span style="width:<?= round($fuelPct, 1) ?>%"></span></div>
+        </div>
+        <div class="stat">
+          <div class="k">Free space</div>
+          <div class="v sm"><?= $carrier['space_free'] === null ? '—' : fc_num((int) $carrier['space_free']) ?> <span class="muted small">t</span></div>
+        </div>
+        <div class="stat">
+          <div class="k"><?= $next === null ? 'Next jump' : 'Jumping to' ?></div>
+          <div class="v sm">
+            <?php if ($next === null): ?>
+              <span class="muted">None plotted</span>
+            <?php else: ?>
+              <?= fc_e($next['system'] ?? '?') ?>
+              <div class="muted small" style="margin-top:4px"><?= fc_e(fc_ago($next['departure_time'])) ?></div>
+            <?php endif; ?>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="btn ghost sm" href="<?= fc_e(fc_carrier_link($carrier)) ?>">Overview</a>
+        <a class="btn ghost sm" href="<?= fc_e(fc_carrier_link($carrier)) ?>&amp;tab=finance">Finance</a>
+        <a class="btn ghost sm" href="<?= fc_e(fc_carrier_link($carrier)) ?>&amp;tab=market">Market</a>
+      </div>
+    </div>
+    <?php
+}
+
+/**
+ * The fleet at a glance, above the individual carriers.
+ *
+ * Only drawn for more than one, because a summary of a single carrier is the
+ * carrier written twice.
+ */
+function fc_render_fleet_summary(array $carriers): void
+{
+    if (count($carriers) < 2) {
+        return;
+    }
+
+    $balance = 0;
+    $haveBalance = false;
+    $free = 0;
+    $haveFree = false;
+    $attention = 0;
+
+    foreach ($carriers as $carrier) {
+        if ($carrier['balance'] !== null) {
+            $balance += (int) $carrier['balance'];
+            $haveBalance = true;
+        }
+        if ($carrier['space_free'] !== null) {
+            $free += (int) $carrier['space_free'];
+            $haveFree = true;
+        }
+        if (fc_carrier_warnings($carrier) !== []) {
+            $attention++;
+        }
+    }
+    ?>
+    <div class="stats" style="margin-bottom:18px">
+      <div class="stat">
+        <div class="k">Carriers</div>
+        <div class="v"><?= count($carriers) ?></div>
+      </div>
+      <div class="stat">
+        <div class="k">Combined balance</div>
+        <div class="v sm"><?= $haveBalance ? fc_cr($balance) : '—' ?> <span class="muted small">cr</span></div>
+      </div>
+      <div class="stat">
+        <div class="k">Free space</div>
+        <div class="v sm"><?= $haveFree ? fc_num($free) : '—' ?> <span class="muted small">t</span></div>
+      </div>
+      <div class="stat">
+        <div class="k">Needing attention</div>
+        <div class="v" style="<?= $attention > 0 ? 'color:var(--warn)' : '' ?>"><?= $attention ?></div>
+      </div>
+    </div>
+    <?php
+}

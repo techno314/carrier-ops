@@ -86,8 +86,9 @@ fc_head('Dashboard');
         </div>
       <?php endif; ?>
     </div>
-  <?php else: ?>
+  <?php elseif (count($mine) === 1): ?>
     <?php
+    // One carrier: it is the page, so show everything about it.
     $primary = $mine[0];
     $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $primary['id']]);
     fc_render_carrier_title($primary, true);
@@ -119,19 +120,39 @@ fc_head('Dashboard');
       </p>
     </div>
 
-    <?php if (count($mine) > 1): ?>
-      <div class="card">
-        <h2>Your other carriers</h2>
-        <div class="tablewrap">
-          <table>
-            <thead><tr><th>Carrier</th><th>System</th><th class="num">Fuel</th><th>Docking</th><th>Updated</th></tr></thead>
-            <tbody>
-            <?php foreach (array_slice($mine, 1) as $carrier) { fc_render_carrier_row($carrier); } ?>
-            </tbody>
-          </table>
-        </div>
+  <?php else: ?>
+    <?php
+    // Several: nobody reads six full stat blocks. Anything in trouble comes
+    // first, because the reason to open a fleet view is to find it.
+    usort($mine, static function (array $a, array $b): int {
+        $wa = fc_carrier_warnings($a) === [] ? 1 : 0;
+        $wb = fc_carrier_warnings($b) === [] ? 1 : 0;
+        return [$wa, $b['updated_at']] <=> [$wb, $a['updated_at']];
+    });
+    ?>
+
+    <h1>Your carriers</h1>
+    <?php fc_render_fleet_summary($mine); ?>
+
+    <div class="grid two">
+      <?php foreach ($mine as $carrier) { fc_render_carrier_card($carrier); } ?>
+    </div>
+
+    <div class="card">
+      <h2>Everything at once</h2>
+      <div class="actions" style="margin-top:0">
+        <a class="btn ghost sm" href="<?= fc_e(fc_url('upload.php')) ?>">Upload a journal</a>
+        <?php if (fc_capi_configured()): ?>
+          <a class="btn ghost sm" href="<?= fc_e(fc_url('capi.php')) ?>">Fetch from Frontier</a>
+        <?php endif; ?>
+        <a class="btn ghost sm" href="<?= fc_e(fc_url('search.php')) ?>">Browse the board</a>
       </div>
-    <?php endif; ?>
+      <p class="small dim" style="margin-bottom:0">
+        Elite allows one fleet carrier per Frontier account, so watching several means connecting several
+        accounts. Each keeps its own Frontier link and updates independently.
+      </p>
+    </div>
+
   <?php endif; ?>
 </main>
 <?php fc_foot();
