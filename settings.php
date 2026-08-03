@@ -42,33 +42,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($email !== '' && fc_one('SELECT id FROM fc_users WHERE email = :e AND id <> :id', ['e' => $email, 'id' => $user['id']]) !== null) {
             $error = 'Another account already uses that email address.';
         } else {
-            fc_exec('UPDATE fc_users SET cmdr_name = :c WHERE id = :id', [
+            fc_exec('UPDATE fc_users SET cmdr_name = :c, email = :e WHERE id = :id', [
                 'c' => $cmdr === '' ? null : $cmdr,
+                'e' => $email === '' ? null : $email,
                 'id' => $user['id'],
             ]);
-
-            $current = (string) ($user['email'] ?? '');
-            if ($email === $current) {
-                fc_flash('Profile saved.');
-            } elseif ($email === '') {
-                // Removing an address is immediate. There is nothing to prove,
-                // and keeping the old one against the owner's wishes would be
-                // the wrong way round.
-                fc_exec('UPDATE fc_users SET email = NULL, email_verified_at = NULL WHERE id = :id', ['id' => $user['id']]);
-                fc_flash('Profile saved. The email address was removed, so password reset is no longer available.');
-            } elseif (!fc_mail_enabled()) {
-                fc_exec('UPDATE fc_users SET email = :e WHERE id = :id', ['e' => $email, 'id' => $user['id']]);
-                fc_flash('Profile saved.');
-            } else {
-                // The new address is not written yet. It goes on the account
-                // when the link is followed, so a typo cannot strand a working
-                // account behind an address nobody reads.
-                $ok = fc_send_verification((int) $user['id'], (string) $user['username'], $email);
-                fc_flash($ok
-                    ? 'Profile saved. Confirm ' . $email . ' with the link we just sent — until then the old address stays on the account.'
-                    : 'Profile saved, but no confirmation mail went out. Try again in a while.',
-                    $ok ? 'ok' : 'err');
-            }
+            fc_flash('Profile saved.');
             fc_redirect(fc_url('settings.php'));
         }
     } elseif ($action === 'password') {
@@ -161,21 +140,6 @@ fc_head('Settings', 'settings');
       <div class="field">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" value="<?= fc_e($user['email'] ?? '') ?>">
-        <?php if (fc_mail_enabled()): ?>
-          <p class="small" style="margin:8px 0 0">
-            <?php if (($user['email'] ?? null) === null): ?>
-              <span class="badge off">No address</span>
-              <span class="dim">Without one there is no way to reset a forgotten password.</span>
-            <?php elseif ($user['email_verified_at'] !== null): ?>
-              <span class="badge on">Confirmed</span>
-              <span class="dim">Changing it sends a new link, and the old address stays until that link is followed.</span>
-            <?php else: ?>
-              <span class="badge warn">Not confirmed</span>
-              <span class="dim">Uploading is closed until it is.</span>
-              <a href="<?= fc_e(fc_url('account.php?do=resend')) ?>">Send the link again</a>
-            <?php endif; ?>
-          </p>
-        <?php endif; ?>
       </div>
 
       <div class="actions"><button class="btn" type="submit">Save</button></div>

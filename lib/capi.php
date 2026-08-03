@@ -95,18 +95,38 @@ function fc_ingest_capi(array $data, array $user, ?string $ts = null): array
 
     $carrier = fc_carrier($carrierId);
 
+    // This is the only path that may claim a carrier, because it is the only
+    // one where the claim is backed by anything: the payload was fetched with
+    // a token Frontier issued to this account, either by the EDMC plugin or by
+    // our own authorisation. The customer_id is recorded alongside so the
+    // claim can be traced back to the Frontier account that made it.
+    $customerId = fc_one(
+        'SELECT customer_id FROM fc_capi_tokens WHERE user_id = :u',
+        ['u' => $user['id']],
+    )['customer_id'] ?? null;
+
     if ($carrier === null) {
         fc_exec(
-            'INSERT INTO fc_carriers (id, owner_user_id, created_at, updated_at)
-             VALUES (:id, :owner, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+            'INSERT INTO fc_carriers (id, owner_user_id, owner_customer_id, created_at, updated_at)
+             VALUES (:id, :owner, :cust, UTC_TIMESTAMP(), UTC_TIMESTAMP())
              ON DUPLICATE KEY UPDATE updated_at = UTC_TIMESTAMP()',
-            ['id' => $carrierId, 'owner' => $user['id']],
+            ['id' => $carrierId, 'owner' => $user['id'], 'cust' => $customerId],
         );
         $carrier = fc_carrier($carrierId);
     } elseif ($carrier['owner_user_id'] === null) {
         fc_exec(
-            'UPDATE fc_carriers SET owner_user_id = :owner WHERE id = :id AND owner_user_id IS NULL',
-            ['owner' => $user['id'], 'id' => $carrierId],
+            'UPDATE fc_carriers SET owner_user_id = :owner, owner_customer_id = :cust
+              WHERE id = :id AND owner_user_id IS NULL',
+            ['owner' => $user['id'], 'cust' => $customerId, 'id' => $carrierId],
+        );
+        $carrier = fc_carrier($carrierId);
+    } elseif (fc_owns($user, $carrier) && $carrier['owner_customer_id'] === null && $customerId !== null) {
+        // Claimed before the Frontier link existed, or before this column did.
+        // The owner is fetching it with their own token right now, which is the
+        // same proof a fresh claim would rest on, so record it.
+        fc_exec(
+            'UPDATE fc_carriers SET owner_customer_id = :cust WHERE id = :id AND owner_customer_id IS NULL',
+            ['cust' => $customerId, 'id' => $carrierId],
         );
         $carrier = fc_carrier($carrierId);
     } elseif (!fc_owns($user, $carrier)) {

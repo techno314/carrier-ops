@@ -78,15 +78,13 @@ function fc_handle_admin_post(string $action, array $admin): void
             fc_flash($target['username'] . ' is no longer an admin.');
             return;
 
-        case 'admin_verify':
-            // For the case the mail simply will not arrive. Vouching for an
-            // address by hand is better than an account nobody can rescue.
-            if ($target['email'] === null) {
-                fc_flash('That account has no address to confirm.', 'err');
-                return;
-            }
-            fc_exec('UPDATE fc_users SET email_verified_at = UTC_TIMESTAMP() WHERE id = :id', ['id' => $targetId]);
-            fc_flash($target['email'] . ' is marked confirmed.');
+        case 'admin_unlink':
+            // Removes the Frontier authorisation without touching the account.
+            // Its carriers keep the customer_id that claimed them, so nothing
+            // silently becomes unowned.
+            fc_exec('DELETE FROM fc_capi_tokens WHERE user_id = :id', ['id' => $targetId]);
+            fc_exec('DELETE FROM fc_capi_pending WHERE user_id = :id', ['id' => $targetId]);
+            fc_flash($target['username'] . ' is no longer linked to Frontier.');
             return;
 
         case 'admin_delete':
@@ -100,7 +98,8 @@ function fc_handle_admin_post(string $action, array $admin): void
             $released = fc_exec('UPDATE fc_carriers SET owner_user_id = NULL WHERE owner_user_id = :id', ['id' => $targetId]);
             fc_exec('DELETE FROM fc_sessions WHERE user_id = :id', ['id' => $targetId]);
             fc_exec('DELETE FROM fc_password_resets WHERE user_id = :id', ['id' => $targetId]);
-            fc_exec('DELETE FROM fc_email_tokens WHERE user_id = :id', ['id' => $targetId]);
+            fc_exec('DELETE FROM fc_capi_tokens WHERE user_id = :id', ['id' => $targetId]);
+            fc_exec('DELETE FROM fc_capi_pending WHERE user_id = :id', ['id' => $targetId]);
             fc_exec('DELETE FROM fc_users WHERE id = :id', ['id' => $targetId]);
             fc_flash($target['username'] . ' was deleted. '
                 . ($released === 0 ? 'No carriers were attached.'
@@ -115,7 +114,9 @@ function fc_render_admin(array $admin): void
         'SELECT u.*,
                 (SELECT COUNT(*) FROM fc_carriers c WHERE c.owner_user_id = u.id) AS carriers,
                 (SELECT COUNT(*) FROM fc_uploads p WHERE p.user_id = u.id) AS uploads,
-                (SELECT MAX(p.ts) FROM fc_uploads p WHERE p.user_id = u.id) AS last_upload
+                (SELECT MAX(p.ts) FROM fc_uploads p WHERE p.user_id = u.id) AS last_upload,
+                (SELECT k.customer_id FROM fc_capi_tokens k WHERE k.user_id = u.id) AS customer_id,
+                (SELECT k.needs_reauth FROM fc_capi_tokens k WHERE k.user_id = u.id) AS needs_reauth
            FROM fc_users u
           ORDER BY u.created_at DESC',
     );
@@ -152,7 +153,7 @@ function fc_render_admin(array $admin): void
           <table>
             <thead>
             <tr>
-              <th>Account</th><th>Email</th><th class="num">Carriers</th>
+              <th>Account</th><th>Frontier</th><th class="num">Carriers</th>
               <th class="num">Uploads</th><th>Last seen</th><th>State</th><th></th>
             </tr>
             </thead>
@@ -166,13 +167,13 @@ function fc_render_admin(array $admin): void
                   <div class="small muted"><?= fc_e($u['cmdr_name'] ?? '—') ?> · joined <?= fc_e(fc_dt($u['created_at'])) ?></div>
                 </td>
                 <td class="small">
-                  <?php if ($u['email'] === null): ?>
-                    <span class="dim">none</span>
+                  <?php if ($u['customer_id'] === null): ?>
+                    <span class="badge off">Not linked</span>
                   <?php else: ?>
-                    <?= fc_e($u['email']) ?>
-                    <div><?= $u['email_verified_at'] === null
-                        ? '<span class="badge warn">Unconfirmed</span>'
-                        : '<span class="badge on">Confirmed</span>' ?></div>
+                    <span class="mono"><?= fc_e($u['customer_id']) ?></span>
+                    <div><?= (int) $u['needs_reauth'] === 1
+                        ? '<span class="badge warn">Needs re-authorising</span>'
+                        : '<span class="badge on">Linked</span>' ?></div>
                   <?php endif; ?>
                 </td>
                 <td class="num"><?= (int) $u['carriers'] ?></td>
@@ -206,8 +207,9 @@ function fc_render_admin(array $admin): void
                                 onclick="return confirm('Make <?= fc_e($u['username']) ?> an admin? They will be able to see and manage every carrier.')">Make admin</button>
                       <?php endif; ?>
 
-                      <?php if ($u['email'] !== null && $u['email_verified_at'] === null): ?>
-                        <button class="btn ghost sm" name="action" value="admin_verify">Confirm email</button>
+                      <?php if ($u['customer_id'] !== null): ?>
+                        <button class="btn ghost sm" name="action" value="admin_unlink"
+                                onclick="return confirm('Unlink <?= fc_e($u['username']) ?> from Frontier? They will have to authorise again to upload.')">Unlink Frontier</button>
                       <?php endif; ?>
 
                       <button class="btn danger ghost sm" name="action" value="admin_delete"

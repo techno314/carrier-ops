@@ -52,32 +52,10 @@ const FC_CAPI_TIMEOUT = 20;
 /** Least time between automatic /fleetcarrier calls for one account. */
 const FC_CAPI_MIN_FETCH_INTERVAL = 900;
 
-/**
- * The registered client id.
- *
- * Frontier asks that keys stay out of open source, so this comes from the
- * environment or from `.htcapi-client` in the app root -- the same `.ht`
- * handling as the admin code and the SMTP password, which nginx here refuses
- * to serve.
- */
-function fc_capi_client_id(): ?string
-{
-    $env = fc_env('FC_CAPI_CLIENT_ID');
-    if ($env !== null) {
-        return $env;
-    }
-    $raw = @file_get_contents(FC_ROOT . '/.htcapi-client');
-    if ($raw === false) {
-        return null;
-    }
-    $raw = trim($raw);
-    return $raw === '' ? null : $raw;
-}
-
-function fc_capi_configured(): bool
-{
-    return fc_capi_client_id() !== null;
-}
+// fc_capi_client_id() and fc_capi_configured() live in core.php, beside the
+// other configuration lookups. Every page needs to know whether linking is
+// available in order to draw the nav prompt, and reaching that answer should
+// not drag the whole ingest stack in behind it.
 
 /** Must match what is registered with Frontier, exactly. */
 function fc_capi_redirect_uri(): string

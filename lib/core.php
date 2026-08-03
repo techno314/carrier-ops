@@ -92,6 +92,33 @@ function fc_admin_code(): ?string
     return $raw === '' ? null : $raw;
 }
 
+/**
+ * The registered Frontier Auth client id.
+ *
+ * Frontier asks that keys stay out of open source, so this comes from the
+ * environment or from `.htcapi-client` in the app root -- the same `.ht`
+ * handling as the admin code and the SMTP password, which nginx here refuses
+ * to serve.
+ */
+function fc_capi_client_id(): ?string
+{
+    $env = fc_env('FC_CAPI_CLIENT_ID');
+    if ($env !== null) {
+        return $env;
+    }
+    $raw = @file_get_contents(FC_ROOT . '/.htcapi-client');
+    if ($raw === false) {
+        return null;
+    }
+    $raw = trim($raw);
+    return $raw === '' ? null : $raw;
+}
+
+function fc_capi_configured(): bool
+{
+    return fc_capi_client_id() !== null;
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
@@ -585,39 +612,66 @@ function fc_head(string $title, string $active = ''): void
   </div>
 </header>
 <?php
-    // Shown on every page rather than only where it bites, so the reason
-    // uploading is refused is already on screen before it is tried.
-    if ($user !== null && !fc_email_verified($user)) {
+    // Shown on every page rather than only where it bites, so the reason an
+    // upload will be refused is on screen before it is attempted.
+    if ($user !== null && !fc_account_linked($user)) {
         ?>
 <div class="verifybar">
-  Confirm your email address to upload journals and claim a carrier.
-  <?php if (($user['email'] ?? null) !== null): ?>
-    We sent a link to <strong><?= fc_e($user['email']) ?></strong>.
-  <?php endif; ?>
-  <a href="<?= fc_e(fc_url('account.php?do=resend')) ?>">Send it again</a>
+  Connect your Frontier account to claim your carrier and upload journals.
+  <a href="<?= fc_e(fc_url('capi.php')) ?>">Connect now</a>
 </div>
 <?php
     }
 }
 
 /**
- * Refuse an action until the account's address has been proved.
+ * Has this account proved who it is, by authorising with Frontier?
  *
- * Uploading is the line, not signing in. Someone locked out of the whole board
- * by a mail that never arrived cannot reach the page that resends it, whereas
- * this leaves every read-only part of the site working.
+ * Ownership used to be an assertion: uploading a journal containing a
+ * carrier's owner-only events claimed it, and a journal is a text file anyone
+ * can write. Authorising with Frontier is the only proof available that does
+ * not rely on trusting the uploader, so it is what the board now asks for.
+ *
+ * Two deliberate exemptions. An admin is never locked out, because the way
+ * back in from a mistake here is through the site itself. And where no client
+ * id is configured there is nothing to authorise against, so the check would
+ * be a door with no key rather than a gate.
+ *
+ * A lapsed link still counts. Ownership was proved when it was made, and the
+ * carrier rows record it; re-authorising is only needed to read fresh data
+ * from Frontier, which is its own separate prompt.
  */
-function fc_require_verified(array $user): void
+function fc_account_linked(?array $user): bool
 {
-    if (fc_email_verified($user)) {
+    if ($user === null) {
+        return false;
+    }
+    if ((int) ($user['is_admin'] ?? 0) === 1 || !fc_capi_configured()) {
+        return true;
+    }
+    return fc_one(
+        'SELECT user_id FROM fc_capi_tokens WHERE user_id = :u',
+        ['u' => $user['id']],
+    ) !== null;
+}
+
+/**
+ * Refuse an action until the account has been linked to Frontier.
+ *
+ * Uploading is the line, not signing in: an account that cannot reach any page
+ * cannot reach the one that fixes it, and everything read-only stays open.
+ */
+function fc_require_link(array $user): void
+{
+    if (fc_account_linked($user)) {
         return;
     }
     if (fc_wants_json()) {
-        fc_fail(403, 'Confirm your email address before uploading. '
-            . 'Open the link we sent you, or request another from the settings page.');
+        fc_fail(403, 'Connect your Frontier account before uploading. '
+            . 'Sign in and open ' . fc_url('capi.php') . ' to do it.');
     }
-    fc_flash('Confirm your email address before uploading — we sent a link when you registered.', 'err');
-    fc_redirect(fc_url('settings.php'));
+    fc_flash('Connect your Frontier account first — that is what proves the carrier is yours.', 'err');
+    fc_redirect(fc_url('capi.php'));
 }
 
 function fc_foot(): void

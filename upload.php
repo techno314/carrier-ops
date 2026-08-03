@@ -12,7 +12,7 @@ $error = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     fc_check_csrf();
-    fc_require_verified($user);
+    fc_require_link($user);
 
     $files = $_FILES['journals'] ?? null;
     if ($files === null || !is_array($files['name'])) {

@@ -243,38 +243,47 @@ function fc_touch_carrier(array &$report, int $id, ?string $callsign): void
 /**
  * Create the carrier row if it is new, and return it.
  *
- * `$claim` is true for owner-only events: the uploader becomes the owner of a
- * carrier that has none. A carrier owned by somebody else is never reassigned.
+ * `$claim` is true for owner-only events, and a journal can no longer claim
+ * anything with them. A journal is a text file its owner writes: nothing in
+ * one distinguishes a commander's own carrier from an invented `CarrierStats`
+ * naming somebody else's, so treating these events as proof of ownership meant
+ * ownership was only ever an assertion. Authorising with Frontier is the one
+ * proof available that does not rest on trusting the uploader, so claiming now
+ * happens there and only there -- see fc_ingest_capi.
+ *
+ * Owner-only events still apply to a carrier you have already claimed, which
+ * is what keeps journal uploads useful for everything the Companion API does
+ * not report.
  */
 function fc_carrier_for_write(int $id, array $user, bool $claim, array &$report): ?array
 {
     $carrier = fc_carrier($id);
 
     if ($carrier === null) {
+        // Created unowned whatever the event was. A row exists so that public
+        // sightings still accumulate; ownership waits for Frontier.
         fc_exec(
             'INSERT INTO fc_carriers (id, owner_user_id, created_at, updated_at)
-             VALUES (:id, :owner, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+             VALUES (:id, NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP())
              ON DUPLICATE KEY UPDATE updated_at = UTC_TIMESTAMP()',
-            ['id' => $id, 'owner' => $claim ? $user['id'] : null],
+            ['id' => $id],
         );
-        return fc_carrier($id);
+        $carrier = fc_carrier($id);
+        if ($carrier === null || !$claim) {
+            return $carrier;
+        }
     }
 
-    if ($claim) {
-        if ($carrier['owner_user_id'] === null) {
-            fc_exec(
-                'UPDATE fc_carriers SET owner_user_id = :owner WHERE id = :id AND owner_user_id IS NULL',
-                ['owner' => $user['id'], 'id' => $id],
-            );
-            $carrier = fc_carrier($id);
-        } elseif ((int) $carrier['owner_user_id'] !== (int) $user['id'] && (int) $user['is_admin'] !== 1) {
-            $note = 'Carrier ' . ($carrier['callsign'] ?? $id) . ' is already claimed by another account; '
+    if ($claim && !fc_owns($user, $carrier)) {
+        $note = $carrier['owner_user_id'] === null
+            ? 'Carrier ' . ($carrier['callsign'] ?? $id) . ' is not claimed by any account yet. '
+                . 'Connect your Frontier account to claim it — a journal cannot prove a carrier is yours.'
+            : 'Carrier ' . ($carrier['callsign'] ?? $id) . ' belongs to another account; '
                 . 'its owner-only events were ignored.';
-            if (!in_array($note, $report['notes'], true)) {
-                $report['notes'][] = $note;
-            }
-            return null;
+        if (!in_array($note, $report['notes'], true)) {
+            $report['notes'][] = $note;
         }
+        return null;
     }
 
     return $carrier;

@@ -24,8 +24,9 @@ if ($user === null) {
           writes on your own machine.
         </p>
         <p class="muted">
-          There is no Frontier account linking and no third-party API to break. You upload a journal, or point a
-          script at the upload endpoint, and the board keeps itself current.
+          You sign in to Frontier once, which is what proves the carrier is yours, and the board reads it from
+          there. Journal uploads still work alongside it and fill in what the Companion API does not report —
+          on your own machine, from files the game already writes.
         </p>
         <div class="actions">
           <a class="btn" href="<?= fc_e(fc_url('account.php?do=register')) ?>">Create an account</a>
@@ -63,14 +64,27 @@ fc_head('Dashboard');
   <?php if ($mine === []): ?>
     <div class="card">
       <h1>No carrier yet</h1>
-      <p class="muted">
-        Upload a journal containing your carrier's events and it will appear here. The quickest one to find is the
-        most recent <code>Journal.*.log</code> from a session where you docked at your own carrier — opening the
-        Carrier Management screen writes a <code>CarrierStats</code> event, which carries everything at once.
-      </p>
-      <div class="actions">
-        <a class="btn" href="<?= fc_e(fc_url('upload.php')) ?>">Upload a journal</a>
-      </div>
+      <?php if (fc_capi_configured() && !fc_account_linked($user)): ?>
+        <p class="muted">
+          Connect your Frontier account and your carrier appears here by itself. That sign-in is also what claims
+          it — a journal cannot prove a carrier is yours, since it is a file anyone could write.
+        </p>
+        <div class="actions">
+          <a class="btn" href="<?= fc_e(fc_url('capi.php')) ?>">Connect to Frontier</a>
+        </div>
+      <?php else: ?>
+        <p class="muted">
+          Nothing has come through yet. If you have just connected, fetch again in a moment; otherwise upload a
+          journal — the most useful one is a session where you opened the Carrier Management screen, which writes
+          a <code>CarrierStats</code> event carrying everything at once.
+        </p>
+        <div class="actions">
+          <?php if (fc_capi_configured()): ?>
+            <a class="btn" href="<?= fc_e(fc_url('capi.php')) ?>">Fetch from Frontier</a>
+          <?php endif; ?>
+          <a class="btn ghost" href="<?= fc_e(fc_url('upload.php')) ?>">Upload a journal</a>
+        </div>
+      <?php endif; ?>
     </div>
   <?php else: ?>
     <?php
