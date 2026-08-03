@@ -14,6 +14,12 @@ declare(strict_types=1);
  * The key detail: a service that is installed but suspended still costs a
  * retainer. Uninstalling is the only way to zero it out. That is exactly what
  * the Activated/Enabled pair in CarrierStats encodes.
+ *
+ * A Javelin-Class charges the same way from the same table, with one exception
+ * handled in fc_upkeep_estimate: its shipyard is part of the hull rather than
+ * something bought, so it is a core service there and free. (Its Redemption
+ * Office and Secure Warehouse cannot be installed at all, which needs no code
+ * -- a service that cannot exist never appears in a roster.)
  */
 
 if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
@@ -122,7 +128,10 @@ function fc_service_label(string $role): string
  */
 function fc_upkeep(array $crew, ?array $carrier = null): array
 {
-    $upkeep = fc_upkeep_estimate($crew);
+    // Tested inline rather than through fc_is_squadron_carrier: this file is
+    // required by core.php, so it should not reach back up into it.
+    $squadron = ($carrier['squadron_id'] ?? null) !== null;
+    $upkeep = fc_upkeep_estimate($crew, $squadron);
 
     $core = $carrier['core_cost'] ?? null;
     $services = $carrier['services_cost'] ?? null;
@@ -138,9 +147,10 @@ function fc_upkeep(array $crew, ?array $carrier = null): array
 
 /**
  * @param array $crew rows with crew_role / activated / enabled
+ * @param bool $squadron true for a Javelin-Class, whose shipyard is free
  * @return array{core:int,services:int,total:int,lines:array,exact:bool}
  */
-function fc_upkeep_estimate(array $crew): array
+function fc_upkeep_estimate(array $crew, bool $squadron = false): array
 {
     $services = 0;
     $lines = [];
@@ -149,6 +159,13 @@ function fc_upkeep_estimate(array $crew): array
         $role = (string) $member['crew_role'];
         $spec = fc_service($role);
         if ($spec === null || ($spec['core'] ?? false)) {
+            continue;
+        }
+        // A Javelin's shipyard comes with the hull -- always installed, no
+        // hiring price, no salary, and Frontier bills nothing for it. Charging
+        // a Drake's 6.5M for it would contradict the servicesCost of 0 that the
+        // same card shows as the exact figure.
+        if ($squadron && $role === 'Shipyard') {
             continue;
         }
         // Not activated means the service was never installed (or was sold),
