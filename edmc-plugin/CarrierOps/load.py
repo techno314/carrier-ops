@@ -36,7 +36,7 @@ import myNotebook as nb
 from config import appname, appversion, config
 
 PLUGIN_NAME = "CarrierOps"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 
 CFG_URL = "carrierops_url"
 CFG_KEY = "carrierops_apikey"
@@ -86,6 +86,15 @@ URGENT_EVENTS = frozenset({
 
 FLUSH_SECONDS = 20.0
 MAX_BATCH = 200
+
+# A batch that fails is put back rather than dropped. Losing journal events is
+# worse than sending them late: nothing else will ever produce them again, and
+# the board simply ends up with a hole nobody notices. The board is unreachable
+# for ordinary reasons -- maintenance, a restart, a rate limit during a large
+# backfill -- and every one of those used to cost whatever was in flight.
+MAX_ATTEMPTS = 6
+BACKOFF_SECONDS = (2, 5, 15, 30, 60)
+MAX_RETRY_WAIT = 120.0
 
 # Carrier callsigns look like V4H-84Q. No starport is named this way, which
 # makes it a safe last resort for identifying a carrier's snapshot files.
@@ -181,11 +190,33 @@ class CarrierOps:
             if item is None:
                 return
 
-            label, body = item
-            self._send(label, body)
+            # Older items were two-tuples; accept both so an upgrade in flight
+            # does not throw.
+            label, body, attempt = item if len(item) == 3 else (*item, 0)
+            self._send(label, body, attempt)
             self.queue.task_done()
 
-    def _send(self, label: str, body: str) -> None:
+    def _retry(self, label: str, body: str, attempt: int, why: str, wait: Optional[float] = None) -> None:
+        """Put a batch back, or give up on it and say so."""
+        if attempt + 1 >= MAX_ATTEMPTS:
+            self.set_status(f"gave up: {why}")
+            logger.error("Carrier Ops gave up on %s after %s attempts: %s", label, MAX_ATTEMPTS, why)
+            return
+
+        delay = wait if wait is not None else BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
+        delay = max(0.0, min(float(delay), MAX_RETRY_WAIT))
+
+        self.set_status(f"{why}, retrying")
+        logger.info("Carrier Ops retrying %s in %.0fs (%s)", label, delay, why)
+
+        # This is the plugin's own worker thread and the queue is drained in
+        # order, so waiting here delays the next batch rather than racing it --
+        # which is what we want when the far end has asked us to slow down.
+        if self.stopping.wait(delay):
+            return
+        self.queue.put((label, body, attempt + 1))
+
+    def _send(self, label: str, body: str, attempt: int = 0) -> None:
         if not self.configured:
             return
         try:
@@ -201,14 +232,36 @@ class CarrierOps:
             )
         except requests.RequestException as err:
             logger.warning("Carrier Ops upload failed: %s", err)
-            self.set_status("offline")
+            self._retry(label, body, attempt, "offline")
             return
 
         if response.status_code == 401:
+            # A wrong key will still be wrong in thirty seconds.
             self.set_status("bad API key")
             logger.warning("Carrier Ops rejected the API key")
             return
+
+        if response.status_code == 429:
+            # The board says slow down and usually says for how long.
+            try:
+                wait = float(response.headers.get("Retry-After", ""))
+            except ValueError:
+                wait = None
+            self._retry(label, body, attempt, "rate limited", wait)
+            return
+
+        if response.status_code == 503:
+            # Maintenance. It ends, and the journal events are still wanted.
+            self._retry(label, body, attempt, "board closed")
+            return
+
+        if response.status_code >= 500:
+            self._retry(label, body, attempt, f"error {response.status_code}")
+            return
+
         if not response.ok:
+            # 4xx other than the above is this plugin sending something the
+            # board will never accept; repeating it would not help.
             self.set_status(f"error {response.status_code}")
             logger.warning("Carrier Ops returned %s: %s", response.status_code, response.text[:200])
             return
@@ -254,7 +307,7 @@ class CarrierOps:
             self.pending = []
             self.last_flush = time.monotonic()
 
-        self.queue.put(("live.log", "\n".join(batch)))
+        self.queue.put(("live.log", "\n".join(batch), 0))
 
     # -- telling a carrier from a starport ---------------------------------
 
@@ -292,7 +345,7 @@ class CarrierOps:
             logger.warning("Could not read %s: %s", path, err)
             return
         if body.strip():
-            self.queue.put((os.path.basename(path), body))
+            self.queue.put((os.path.basename(path), body, 0))
 
     # -- status -----------------------------------------------------------
 
@@ -485,7 +538,7 @@ def capi_fleetcarrier(data) -> None:
         return
 
     ops.remember_carrier(dict(data).get("market") or {})
-    ops.queue.put(("fleetcarrier.json", body))
+    ops.queue.put(("fleetcarrier.json", body, 0))
     logger.debug("Queued a Companion API fleetcarrier payload (%s bytes)", len(body))
 
 
@@ -593,7 +646,7 @@ def _backfill() -> None:
                 continue
 
             if len(batch) >= MAX_BATCH:
-                ops.queue.put((f"backfill-{sent_files}.log", "\n".join(batch)))
+                ops.queue.put((f"backfill-{sent_files}.log", "\n".join(batch), 0))
                 sent_files += 1
                 batch = []
 
@@ -601,7 +654,7 @@ def _backfill() -> None:
                 _set_pref_status(f"Scanned {index}/{len(names)} journals, {found} carrier events…")
 
         if batch:
-            ops.queue.put((f"backfill-{sent_files}.log", "\n".join(batch)))
+            ops.queue.put((f"backfill-{sent_files}.log", "\n".join(batch), 0))
             sent_files += 1
 
         # The current snapshots are worth having too, if they are a carrier's.

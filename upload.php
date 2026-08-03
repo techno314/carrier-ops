@@ -13,6 +13,7 @@ $error = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     fc_check_csrf();
     fc_require_link($user);
+    fc_require_upload_quota($user);
 
     $files = $_FILES['journals'] ?? null;
     if ($files === null || !is_array($files['name'])) {

@@ -189,6 +189,7 @@ case 'ingest':
     // back, and the plugin's own connection test, keep working while an
     // address is still waiting to be confirmed.
     fc_require_link($user);
+    fc_require_upload_quota($user);
 
     $totals = ['seen' => 0, 'applied' => 0, 'carriers' => [], 'notes' => []];
     foreach ($chunks as [$name, $text]) {

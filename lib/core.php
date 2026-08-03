@@ -348,6 +348,60 @@ function fc_maintenance_page(array $state): never
 }
 
 // ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+/**
+ * Uploads one account may make in a minute.
+ *
+ * Generous, because the honest heavy user is a journal backfill: the EDMC
+ * plugin batches two hundred events per file and sends them as fast as its
+ * worker manages, so a first-time upload of a year of journals is a burst of
+ * real requests that must not be mistaken for an attack.
+ */
+const FC_INGEST_PER_MINUTE = 30;
+
+/**
+ * Refuse an upload when this account has been making too many.
+ *
+ * Per account rather than per address, which is what the layers in front of
+ * this cannot do. Cloudflare and nginx both think in IP addresses, and an
+ * authenticated client uploading from one address looks entirely legitimate to
+ * them -- while a single account can hold every PHP worker on the host, since
+ * there are five for the whole domain and a large upload occupies one for
+ * seconds at a time.
+ *
+ * fc_uploads already records every upload with an account and a timestamp, so
+ * the question costs one indexed count and no new schema.
+ */
+function fc_require_upload_quota(array $user): void
+{
+    $recent = (int) (fc_one(
+        'SELECT COUNT(*) AS n FROM fc_uploads
+          WHERE user_id = :id AND ts > (UTC_TIMESTAMP() - INTERVAL 1 MINUTE)',
+        ['id' => $user['id']],
+    )['n'] ?? 0);
+
+    if ($recent < FC_INGEST_PER_MINUTE) {
+        return;
+    }
+
+    // 429 with Retry-After, so a well-behaved client waits rather than
+    // hammering harder. The EDMC plugin reports the status and carries on.
+    http_response_code(429);
+    header('Retry-After: 60');
+    if (fc_wants_json()) {
+        fc_json(429, [
+            'error' => 'Too many uploads. Wait a minute and try again.',
+            'limit' => FC_INGEST_PER_MINUTE,
+            'per' => 'minute',
+        ]);
+    }
+    fc_flash('That is a lot of uploads at once. Give it a minute.', 'err');
+    fc_redirect(fc_url('upload.php'));
+}
+
+// ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
 
