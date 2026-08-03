@@ -8,3 +8,7 @@
 
 # Encrypts stored Frontier tokens. Losing it just means everyone re-authorises.
 .htcapi-key
+
+# Maintenance mode is a per-deployment switch, not source. Tracked once by
+# mistake, which meant a fresh checkout would arrive with the site closed.
+.htmaintenance

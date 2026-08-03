@@ -3,12 +3,10 @@
 declare(strict_types=1);
 
 /**
- * The admin panel, reached at settings.php?do=admin.
+ * The admin panel's logic and rendering; admin.php is the page itself.
  *
- * Lives in lib/ and hangs off settings.php rather than being its own root
- * script, for the same reason the five auth pages became account.php: nginx
- * here has no rewrite available to this app, so every page in the docroot is
- * literally a file, and the root is kept short on purpose.
+ * Split that way so the entry point stays small enough to read in one go: it
+ * checks who is asking, and everything about what the panel does lives here.
  *
  * `is_banned` has been enforced since the beginning -- on sign-in, on the API
  * key path, and on password-reset and verification links -- but until now
@@ -219,9 +217,10 @@ function fc_render_admin(array $admin): void
         <?php endif; ?>
 
         <p class="small dim" style="margin-bottom:0">
-          Locked out? Signing in stays reachable at <code>account.php?do=login</code> the whole time, which is how
-          an admin who was signed out when it started gets back in. Failing that, delete
-          <code>.htmaintenance</code> in the app directory — that needs no database and no session.
+          Locked out? This page stays reachable the whole time, and sends you to sign in if you are not —
+          which is how an admin who was signed out when it started gets back in. The closed sign shows
+          visitors no way through on purpose. Failing all that, delete <code>.htmaintenance</code> in the
+          app directory: no database, no session, nothing but filesystem access.
         </p>
       </div>
 

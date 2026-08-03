@@ -231,11 +231,16 @@ function fc_maintenance_set(?string $message): bool
  * Three ways past it, in order of how much has to be working:
  *
  *   1. Be an admin. Costs a session and a database.
- *   2. Sign in. account.php stays reachable for exactly this reason -- an
- *      admin who was signed out when it started, or who signs out during it,
- *      would otherwise have no way back in through the site at all.
+ *   2. Go to /fc/admin. It and the sign-in page stay reachable for exactly
+ *      this reason: an admin signed out when it started, or who signs out
+ *      during it, would otherwise have no way back in through the site at all.
+ *      Being signed out there is fine -- fc_require_user sends them to sign in
+ *      with `next` pointing back at the panel.
  *   3. Delete the file. Needs nothing but filesystem access, and works when
  *      the database is gone.
+ *
+ * The closed sign deliberately advertises none of this. Anyone who ought to be
+ * getting in already knows where the door is.
  */
 function fc_maintenance_guard(): void
 {
@@ -248,12 +253,21 @@ function fc_maintenance_guard(): void
         return;
     }
 
-    // Signing in and out stay open. Everything else on that page -- register,
-    // password reset -- does not, since none of it is a way back in for an
-    // administrator and all of it writes.
+    // The staff entrance: the panel itself, and signing in and out so that
+    // reaching it is possible while signed out. Everything else on the account
+    // page -- register, password reset -- stays shut, since none of it is a way
+    // back in for an administrator and all of it writes.
     $script = basename((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''));
+    if ($script === 'admin.php') {
+        return;   // its own admin check decides who actually gets in
+    }
+    // Signing *in* only. Signing out is shut along with everything else, so a
+    // stray click on a stale tab cannot end a session while the board is
+    // closed: nobody should come back from maintenance to find themselves
+    // logged out. Nothing here ends a session on its own, so anyone signed in
+    // when it started is still signed in when it lifts.
     $do = (string) ($_GET['do'] ?? 'login');
-    if ($script === 'account.php' && in_array($do, ['login', 'logout'], true)) {
+    if ($script === 'account.php' && $do === 'login') {
         return;
     }
 
@@ -310,9 +324,6 @@ function fc_maintenance_page(array $state): never
     <?php if ($state['since'] !== null): ?>
       <p class="small dim">Since <?= fc_e(gmdate('Y-m-d H:i', $state['since'])) ?> UTC.</p>
     <?php endif; ?>
-    <div class="actions">
-      <a class="btn ghost" href="<?= fc_e(fc_url('account.php?do=login')) ?>">Administrator sign-in</a>
-    </div>
   </div>
 </main>
 <footer class="foot">
@@ -837,7 +848,7 @@ function fc_head(string $title, string $active = ''): void
         ?>
 <div class="maintbar">
   <strong>Maintenance mode is on.</strong> Everyone but admins sees a closed sign.
-  <a href="<?= fc_e(fc_url('settings.php?do=admin')) ?>">Turn it off</a>
+  <a href="<?= fc_e(fc_url('admin.php')) ?>">Turn it off</a>
 </div>
 <?php
     }
