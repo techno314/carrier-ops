@@ -68,6 +68,7 @@ $_SERVER['SCRIPT_FILENAME'] = __FILE__;
 
 require_once __DIR__ . '/../lib/core.php';
 require_once __DIR__ . '/../lib/capi_auth.php';
+require_once __DIR__ . '/../lib/spool.php';
 
 /**
  * Only one run at a time.
@@ -91,7 +92,25 @@ $log = static function (string $line) use ($verbose): void {
     }
 };
 
-$counts = ['webhooks' => 0, 'refreshed' => 0, 'synced' => 0, 'errors' => 0];
+$counts = ['webhooks' => 0, 'refreshed' => 0, 'synced' => 0, 'spooled' => 0, 'errors' => 0];
+
+// --- 0. apply anything that arrived while the board was shut ---------------
+//
+// First, so that a carrier's own uploads are in before the webhooks and the
+// Frontier sync describe it -- otherwise the boards announce a state that is
+// about to change again a moment later.
+try {
+    $drained = fc_spool_drain();
+    $counts['spooled'] = $drained['applied'];
+    $counts['errors'] += $drained['failed'];
+    if ($drained['applied'] > 0 || $drained['failed'] > 0) {
+        $log('spool: applied ' . $drained['applied'] . ' upload(s), '
+            . $drained['events'] . ' events, ' . $drained['failed'] . ' failed');
+    }
+} catch (Throwable $e) {
+    $counts['errors']++;
+    error_log('fc cron: spool drain failed: ' . $e->getMessage());
+}
 
 // --- 1. deliver anything the queue is still holding ------------------------
 try {
@@ -178,14 +197,15 @@ try {
 
 $elapsed = round(microtime(true) - $started, 2);
 $summary = sprintf(
-    'webhooks=%d refreshed=%d synced=%d errors=%d in %ss',
-    $counts['webhooks'], $counts['refreshed'], $counts['synced'], $counts['errors'], $elapsed,
+    'spooled=%d webhooks=%d refreshed=%d synced=%d errors=%d in %ss',
+    $counts['spooled'], $counts['webhooks'], $counts['refreshed'], $counts['synced'],
+    $counts['errors'], $elapsed,
 );
 $log($summary);
 
 // Only worth a line in the log when something happened or something broke, so
 // a quiet installation does not fill the log with news of nothing.
-if ($counts['errors'] > 0 || $counts['refreshed'] > 0 || $counts['synced'] > 0 || $counts['webhooks'] > 0) {
+if (array_sum($counts) > 0) {
     error_log('fc cron: ' . $summary);
 }
 

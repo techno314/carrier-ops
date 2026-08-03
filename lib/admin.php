@@ -19,6 +19,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
 }
 
 require_once __DIR__ . '/render.php';   // fc_carrier_link, fc_carrier_display_name
+require_once __DIR__ . '/spool.php';
 
 /**
  * Apply an admin action.
@@ -41,6 +42,17 @@ function fc_handle_admin_post(string $action, array $admin): void
         }
         return;
     }
+    if ($action === 'admin_spool_drain') {
+        $r = fc_spool_drain();
+        fc_flash($r['applied'] === 0 && $r['failed'] === 0
+            ? 'Nothing was waiting.'
+            : sprintf('Applied %d queued upload%s (%d events)%s.',
+                $r['applied'], $r['applied'] === 1 ? '' : 's', $r['events'],
+                $r['failed'] === 0 ? '' : ', ' . $r['failed'] . ' failed'),
+            $r['failed'] > 0 ? 'err' : 'ok');
+        return;
+    }
+
     if ($action === 'admin_maintenance_off') {
         fc_flash(fc_maintenance_set(null)
             ? 'Maintenance mode is off. The board is open.'
@@ -216,7 +228,28 @@ function fc_render_admin(array $admin): void
           </form>
         <?php endif; ?>
 
+        <?php [$spoolFiles, $spoolBytes] = fc_spool_size(); ?>
+        <?php if ($spoolFiles > 0): ?>
+          <div class="banner<?= $maintenance === null ? ' warn' : '' ?>" style="margin-top:14px">
+            <strong><?= (int) $spoolFiles ?> upload<?= $spoolFiles === 1 ? '' : 's' ?> waiting</strong>
+            (<?= number_format($spoolBytes / 1024, 1) ?> KB).
+            <?= $maintenance === null
+                ? 'The next scheduled run will apply them, or do it now.'
+                : 'These arrived while the board was closed and will be applied when it reopens.' ?>
+            <?php if ($maintenance === null): ?>
+              <form method="post" style="margin-top:8px">
+                <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+                <div class="actions" style="margin-top:0">
+                  <button class="btn ghost sm" type="submit" name="action" value="admin_spool_drain">Apply them now</button>
+                </div>
+              </form>
+            <?php endif; ?>
+          </div>
+        <?php endif; ?>
+
         <p class="small dim" style="margin-bottom:0">
+          Uploads are not refused while the board is closed — they are taken and held, then applied once it
+          reopens, so nobody loses a journal to a maintenance window. Admin uploads apply immediately as usual.
           Locked out? This page stays reachable the whole time, and sends you to sign in if you are not —
           which is how an admin who was signed out when it started gets back in. The closed sign shows
           visitors no way through on purpose. Failing all that, delete <code>.htmaintenance</code> in the

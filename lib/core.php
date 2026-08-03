@@ -294,7 +294,87 @@ function fc_maintenance_guard(): void
         return;
     }
 
+    // Everyone else is shut out, but an upload is not turned away -- it is
+    // taken and set aside. Refusing one does not delay it, it loses it: the
+    // game carries on regardless and the board ends up with a gap.
+    if ($user !== null && fc_maintenance_spool($user)) {
+        // Never reached; fc_maintenance_spool answers 202 and exits.
+        return;
+    }
+
     fc_maintenance_page($state);
+}
+
+/**
+ * Take an upload for later instead of refusing it.
+ *
+ * Only ingest requests, and only from an account we could identify. Everything
+ * else about the site is readable again in a few minutes and can simply be
+ * asked for again; an upload cannot, because whoever sent it has moved on.
+ *
+ * Answers 202 rather than 200: the data is accepted but nothing has been
+ * applied yet, and a client that treats 2xx as success will not retry -- which
+ * is what we want, since a retry would spool a second copy.
+ *
+ * Never returns when it spools something.
+ */
+function fc_maintenance_spool(array $user): bool
+{
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        return false;
+    }
+
+    $script = basename((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''));
+    $isApi = $script === 'api.php' && ($_GET['action'] ?? '') === 'ingest';
+    $isWeb = $script === 'upload.php';
+    if (!$isApi && !$isWeb) {
+        return false;
+    }
+
+    // A browser form still has to prove it meant it. The API path is
+    // authenticated by a key it had to be given, which is proof enough.
+    if ($isWeb) {
+        $sent = $_POST['csrf'] ?? '';
+        if (!is_string($sent) || !hash_equals(fc_csrf(), $sent)) {
+            return false;
+        }
+    }
+
+    require_once __DIR__ . '/spool.php';
+
+    $chunks = fc_spool_request_bodies();
+    if ($chunks === []) {
+        return false;
+    }
+
+    $taken = 0;
+    foreach ($chunks as [$name, $body]) {
+        if (fc_spool_add($user, $isApi ? 'api' : 'web', $name, $body)) {
+            $taken++;
+        }
+    }
+
+    if ($taken === 0) {
+        return false;   // spool full or unwritable; fall through to the closed sign
+    }
+
+    if ($isWeb) {
+        fc_flash($taken . ' file' . ($taken === 1 ? '' : 's')
+            . ' received and queued. They will be applied when maintenance finishes.');
+        fc_redirect(fc_url('upload.php'));
+    }
+
+    http_response_code(202);
+    header('Cache-Control: no-store');
+    header('Content-Type: application/json');
+    echo json_encode([
+        'queued' => $taken,
+        'eventsSeen' => 0,
+        'eventsApplied' => 0,
+        'carriers' => [],
+        'notes' => ['The board is down for maintenance. Your upload was queued and will be applied when it finishes.'],
+    ], JSON_UNESCAPED_SLASHES);
+    exit;
 }
 
 function fc_maintenance_page(array $state): never

@@ -4,3 +4,6 @@
 .htcapi-client
 .htcapi-key
 .htmaintenance
+
+# Uploads taken while the board was closed, applied when it reopens.
+.htspool/
