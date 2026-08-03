@@ -221,6 +221,7 @@ function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts,
         foreach ([
             'balance' => 'balance',
             'taxation' => 'taxation',
+            'reserve_balance' => 'bankReservedBalance',
             'core_cost' => 'coreCost',
             'services_cost' => 'servicesCost',
             'jumps_cost' => 'jumpsCost',
@@ -231,12 +232,29 @@ function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts,
                 $fields[$column] = (int) $source[$key];
             }
         }
-        // `taxation` is sometimes a per-service map rather than a single rate.
-        if (is_array($finance['taxation'] ?? null)) {
-            unset($fields['taxation']);
+
+        // Per-service tax rates live under `service_taxation`, while `taxation`
+        // beside it is a single scalar rate. Reading the map out of `taxation`
+        // was wrong and quietly left every tax_* column null, on every carrier
+        // -- the mistake is invisible because a carrier taxing nothing and a
+        // carrier we never read the rates for both display as blank.
+        //
+        // The array form of `taxation` is still honoured: it costs one branch,
+        // and this is somebody else's API to change.
+        $taxes = null;
+        foreach ([$finance['service_taxation'] ?? null, $finance['taxation'] ?? null] as $candidate) {
+            if (is_array($candidate)) {
+                $taxes = $candidate;
+                break;
+            }
+        }
+        if ($taxes !== null) {
+            if (!is_numeric($finance['taxation'] ?? null)) {
+                unset($fields['taxation']);
+            }
             foreach (['refuel', 'repair', 'rearm', 'shipyard', 'outfitting'] as $service) {
-                if (isset($finance['taxation'][$service]) && is_numeric($finance['taxation'][$service])) {
-                    $fields['tax_' . $service] = (int) $finance['taxation'][$service];
+                if (isset($taxes[$service]) && is_numeric($taxes[$service])) {
+                    $fields['tax_' . $service] = (int) $taxes[$service];
                 }
             }
         }
