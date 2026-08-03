@@ -228,15 +228,27 @@ function fc_render_admin(array $admin): void
           </form>
         <?php endif; ?>
 
-        <?php [$spoolFiles, $spoolBytes] = fc_spool_size(); ?>
-        <?php if ($spoolFiles > 0): ?>
-          <div class="banner<?= $maintenance === null ? ' warn' : '' ?>" style="margin-top:14px">
-            <strong><?= (int) $spoolFiles ?> upload<?= $spoolFiles === 1 ? '' : 's' ?> waiting</strong>
-            (<?= number_format($spoolBytes / 1024, 1) ?> KB).
-            <?= $maintenance === null
-                ? 'The next scheduled run will apply them, or do it now.'
-                : 'These arrived while the board was closed and will be applied when it reopens.' ?>
-            <?php if ($maintenance === null): ?>
+        <?php
+        [$spoolFiles, $spoolBytes] = fc_spool_size();
+        // Shown whenever the board is closed, even at zero: that is precisely
+        // when an admin wants to know the queue is live and how much has piled
+        // up. With the board open an empty queue is not news, so it stays out
+        // of the way until there is something in it.
+        ?>
+        <?php if ($spoolFiles > 0 || $maintenance !== null): ?>
+          <div class="banner<?= $spoolFiles > 0 && $maintenance === null ? ' warn' : '' ?>" style="margin-top:14px">
+            <?php if ($spoolFiles === 0): ?>
+              <strong>No uploads waiting.</strong>
+              Anything that arrives while the board is closed is held here and applied when it reopens.
+            <?php else: ?>
+              <strong><?= (int) $spoolFiles ?> upload<?= $spoolFiles === 1 ? '' : 's' ?> waiting</strong>
+              (<?= number_format($spoolBytes / 1024, 1) ?> KB).
+              <?= $maintenance === null
+                  ? 'The next scheduled run will apply them, or do it now.'
+                  : 'These arrived while the board was closed and will be applied when it reopens.' ?>
+            <?php endif; ?>
+
+            <?php if ($maintenance === null && $spoolFiles > 0): ?>
               <form method="post" style="margin-top:8px">
                 <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
                 <div class="actions" style="margin-top:0">
