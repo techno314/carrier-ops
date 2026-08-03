@@ -550,7 +550,19 @@ function fc_ev_docking(array $carrier, array $event, ?string $ts): bool
 function fc_ev_fuel(array $carrier, array $event, ?string $ts): bool
 {
     $id = (int) $carrier['id'];
-    fc_ledger_add($id, $ts, 'fuel', 'Tritium deposited', isset($event['Amount']) ? (int) $event['Amount'] : null, 't');
+    // `Total` is the reserve after the deposit -- the balance-after for a
+    // tritium row, exactly as CarrierBalance is for a credit one. It was being
+    // read for the carrier's fuel level and then thrown away, which left every
+    // fuel line in the ledger with an empty balance column.
+    fc_ledger_add(
+        $id,
+        $ts,
+        'fuel',
+        'Tritium deposited',
+        isset($event['Amount']) ? (int) $event['Amount'] : null,
+        't',
+        isset($event['Total']) ? (int) $event['Total'] : null,
+    );
     if (fc_stale($carrier, 'fuel_at', $ts) || !isset($event['Total'])) {
         return true;
     }

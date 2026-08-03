@@ -631,13 +631,20 @@ case 'crew':
 
 // ---------------------------------------------------------------------------
 case 'finance':
+    // Credits only. Tritium deposits are recorded in the same table because
+    // they are the same kind of event -- something arrived, here is the total
+    // afterwards -- but a fuel delivery is not a financial transaction and
+    // reading one in a column of credit balances is just noise.
     $ledger = fc_all(
-        'SELECT * FROM fc_ledger WHERE carrier_id = :id ORDER BY ts DESC LIMIT 200',
+        "SELECT * FROM fc_ledger
+          WHERE carrier_id = :id AND unit = 'cr'
+          ORDER BY ts DESC LIMIT 200",
         ['id' => $carrier['id']],
     );
     $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $carrier['id']]);
     fc_render_upkeep($carrier, $crew);
     fc_render_taxes($carrier);
+    fc_render_balance_chart($carrier);
     ?>
     <div class="card">
       <h2>Ledger</h2>

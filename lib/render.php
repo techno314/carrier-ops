@@ -408,3 +408,130 @@ function fc_render_carrier_row(array $carrier): void
     </tr>
     <?php
 }
+
+/**
+ * The carrier's balance over time, as an inline SVG.
+ *
+ * Drawn on the server rather than by a charting library. This app has no
+ * JavaScript dependencies and no build step, and a line through a dozen points
+ * is not a reason to acquire either; an SVG needs nothing at the far end and
+ * prints, scales and reads with JavaScript off.
+ *
+ * Only entries that recorded a balance are plotted. A fuel delivery or a pack
+ * purchase says what it cost but not what was left afterwards, and joining
+ * those to the line would draw a fall that never happened.
+ */
+function fc_render_balance_chart(array $carrier): void
+{
+    $rows = fc_all(
+        "SELECT ts, balance FROM fc_ledger
+          WHERE carrier_id = :id AND unit = 'cr' AND balance IS NOT NULL
+          ORDER BY ts ASC",
+        ['id' => $carrier['id']],
+    );
+
+    // One point is not a line. Two is the least that says anything.
+    if (count($rows) < 2) {
+        return;
+    }
+
+    $points = [];
+    foreach ($rows as $row) {
+        $points[] = [
+            'at' => (int) strtotime((string) $row['ts'] . ' UTC'),
+            'value' => (int) $row['balance'],
+        ];
+    }
+
+    // The balance as it stands belongs on the end, otherwise the line stops at
+    // the last transaction the journal happened to record a balance for.
+    $latest = $carrier['balance'] === null ? null : (int) $carrier['balance'];
+    if ($latest !== null && $latest !== end($points)['value']) {
+        $points[] = ['at' => time(), 'value' => $latest];
+    }
+
+    $values = array_column($points, 'value');
+    $times = array_column($points, 'at');
+    $min = min($values);
+    $max = max($values);
+    $from = min($times);
+    $to = max($times);
+
+    // A flat line would divide by zero, and a carrier whose balance never moved
+    // still deserves a chart rather than a crash.
+    $span = max(1, $to - $from);
+    $range = max(1, $max - $min);
+
+    // Padded so the extremes are not drawn on the frame itself.
+    $w = 1000.0;
+    $h = 220.0;
+    $padX = 8.0;
+    $padY = 14.0;
+
+    $coords = [];
+    foreach ($points as $point) {
+        $x = $padX + ($point['at'] - $from) / $span * ($w - 2 * $padX);
+        $y = $h - $padY - ($point['value'] - $min) / $range * ($h - 2 * $padY);
+        $coords[] = [round($x, 2), round($y, 2), $point];
+    }
+
+    $line = [];
+    foreach ($coords as $c) {
+        $line[] = $c[0] . ',' . $c[1];
+    }
+    $area = $coords[0][0] . ',' . ($h - $padY) . ' '
+        . implode(' ', $line) . ' '
+        . end($coords)[0] . ',' . ($h - $padY);
+
+    $change = end($values) - $values[0];
+    ?>
+    <div class="card">
+      <h2>Balance over time
+        <span class="muted small"><?= count($points) ?> points · <?= fc_e(fc_dt(gmdate('Y-m-d H:i:s', $from))) ?> onwards</span>
+      </h2>
+
+      <div class="chart">
+        <svg viewBox="0 0 <?= (int) $w ?> <?= (int) $h ?>" preserveAspectRatio="none" role="img"
+             aria-label="Carrier balance from <?= fc_e(fc_cr($values[0])) ?> to <?= fc_e(fc_cr(end($values))) ?> credits">
+          <defs>
+            <linearGradient id="fcchart" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="var(--accent)" stop-opacity="0.35"/>
+              <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polygon points="<?= fc_e($area) ?>" fill="url(#fcchart)"/>
+          <polyline points="<?= fc_e(implode(' ', $line)) ?>" fill="none" stroke="var(--accent)"
+                    stroke-width="2" vector-effect="non-scaling-stroke"
+                    stroke-linejoin="round" stroke-linecap="round"/>
+          <?php foreach ($coords as $c): ?>
+            <circle cx="<?= $c[0] ?>" cy="<?= $c[1] ?>" r="3" fill="var(--accent)" vector-effect="non-scaling-stroke">
+              <title><?= fc_e(fc_dt(gmdate('Y-m-d H:i:s', $c[2]['at'])) . ' — ' . fc_cr($c[2]['value']) . ' cr') ?></title>
+            </circle>
+          <?php endforeach; ?>
+        </svg>
+      </div>
+
+      <div class="stats" style="margin-top:14px">
+        <div class="stat">
+          <div class="k">Lowest</div>
+          <div class="v sm"><?= fc_cr($min) ?> <span class="muted small">cr</span></div>
+        </div>
+        <div class="stat">
+          <div class="k">Highest</div>
+          <div class="v sm"><?= fc_cr($max) ?> <span class="muted small">cr</span></div>
+        </div>
+        <div class="stat">
+          <div class="k">Change over the period</div>
+          <div class="v sm" style="color:<?= $change >= 0 ? 'var(--ok)' : 'var(--danger)' ?>">
+            <?= ($change >= 0 ? '+' : '') . fc_cr($change) ?> <span class="muted small">cr</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="small dim" style="margin-bottom:0">
+        Only transactions that reported a balance are plotted — bank transfers do, tritium deliveries and pack
+        purchases do not, so the line follows what the game actually stated rather than guessing between them.
+      </p>
+    </div>
+    <?php
+}
