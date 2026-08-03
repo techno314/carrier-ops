@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib/core.php';
 require_once __DIR__ . '/lib/render.php';
 require_once __DIR__ . '/lib/admin.php';
+require_once __DIR__ . '/lib/capi_auth.php';
 
 $user = fc_require_user();
 $error = null;
@@ -179,6 +180,34 @@ fc_head('Settings', 'settings');
 
       <div class="actions"><button class="btn" type="submit">Save</button></div>
     </form>
+  </div>
+
+  <?php $capiLink = fc_capi_link((int) $user['id']); ?>
+  <div class="card">
+    <h2>Frontier account
+      <?php if (!fc_capi_configured()): ?>
+        <span class="badge off">Unavailable</span>
+      <?php elseif ($capiLink === null): ?>
+        <span class="badge off">Not linked</span>
+      <?php elseif ((int) $capiLink['needs_reauth'] === 1): ?>
+        <span class="badge bad">Needs re-authorising</span>
+      <?php else: ?>
+        <span class="badge on">Linked</span>
+      <?php endif; ?>
+    </h2>
+    <p class="muted small">
+      Linking to Frontier lets the board read your carrier directly, including the cargo hold and the real
+      upkeep figures, without the game or EDMC running. Journal uploads keep working either way.
+    </p>
+    <?php if (fc_capi_configured()): ?>
+      <div class="actions">
+        <a class="btn<?= $capiLink === null ? '' : ' ghost' ?>" href="<?= fc_e(fc_url('capi.php')) ?>">
+          <?= $capiLink === null ? 'Connect to Frontier' : 'Manage the link' ?>
+        </a>
+      </div>
+    <?php else: ?>
+      <p class="small dim" style="margin-bottom:0">No Frontier client id is configured on this deployment.</p>
+    <?php endif; ?>
   </div>
 
   <div class="card">

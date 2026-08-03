@@ -2,3 +2,9 @@
 .schema-version
 .htadmin-code
 .htsmtp-password
+# Frontier Auth client id. Public by nature (it travels in the browser),
+# but kept out of the repo because Frontier asks that keys not be published.
+.htcapi-client
+
+# Encrypts stored Frontier tokens. Losing it just means everyone re-authorises.
+.htcapi-key

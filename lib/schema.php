@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 7;
+const FC_SCHEMA_VERSION = 8;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -404,6 +404,47 @@ function fc_schema_statements(): array
             payload MEDIUMTEXT NULL,
             fetched_at DATETIME NOT NULL,
             KEY fc_buyers_fetched (fetched_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // One Frontier account per Carrier Ops account, so user_id is the key.
+        //
+        // Both tokens are stored encrypted rather than as written: this database
+        // is shared with the other apps on this host, and a refresh token is a
+        // standing key to somebody's Frontier account. The plaintext only ever
+        // exists in memory, and the encryption key lives on the filesystem, so
+        // a dump of the database on its own yields nothing usable.
+        //
+        // Only customer_id and platform are kept from /me. The name and email
+        // it also returns are not needed for anything here, and the least
+        // pleasant way to handle personal data is to store it because it
+        // happened to be in the response.
+        "CREATE TABLE IF NOT EXISTS fc_capi_tokens (
+            user_id INT UNSIGNED NOT NULL PRIMARY KEY,
+            customer_id VARCHAR(64) NULL,
+            platform VARCHAR(32) NULL,
+            access_token BLOB NULL,
+            refresh_token BLOB NULL,
+            scope VARCHAR(64) NULL,
+            expires_at DATETIME NULL,
+            needs_reauth TINYINT(1) NOT NULL DEFAULT 0,
+            last_error VARCHAR(255) NULL,
+            last_fetch_at DATETIME NULL,
+            refreshed_at DATETIME NULL,
+            linked_at DATETIME NOT NULL,
+            KEY fc_capi_tokens_customer (customer_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // An authorisation in flight. The PKCE verifier has to survive the round
+        // trip to Frontier and back, and it cannot go in the URL or a cookie
+        // without defeating the point of PKCE, so it waits here. Rows are
+        // single-use and short-lived; `state` is what ties the callback to the
+        // browser that started it.
+        "CREATE TABLE IF NOT EXISTS fc_capi_pending (
+            state_hash CHAR(64) NOT NULL PRIMARY KEY,
+            user_id INT UNSIGNED NOT NULL,
+            verifier VARCHAR(128) NOT NULL,
+            created_at DATETIME NOT NULL,
+            KEY fc_capi_pending_created (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         // The address being proved is stored on the token rather than read off
