@@ -437,9 +437,23 @@ function fc_board_status_embed(array $carrier, bool $withFinance): array
 
     $fuel = $carrier['fuel_level'] === null ? null : (int) $carrier['fuel_level'];
     $fields[] = [
+        // Fuel and cargo were one field, which read as a claim that the carrier
+        // held two thousand tonnes of tritium -- impossible, the depot holds a
+        // thousand. Two unrelated numbers do not share a heading, however
+        // neatly three fields fit a row.
         'name' => 'Tritium',
-        'value' => ($fuel === null ? '—' : fc_num($fuel) . ' t' . ($fuel <= FC_WEBHOOK_LOW_FUEL ? ' ⚠️' : ''))
-            . "\n" . ($carrier['space_free'] === null ? '' : fc_num((int) $carrier['space_free']) . ' t free'),
+        'value' => $fuel === null
+            ? '—'
+            : fc_num($fuel) . ' t' . ($fuel <= FC_WEBHOOK_LOW_FUEL ? ' ⚠️' : ''),
+        'inline' => true,
+    ];
+
+    $fields[] = [
+        'name' => 'Cargo Space',
+        'value' => $carrier['space_free'] === null
+            ? '—'
+            : fc_num((int) $carrier['space_free']) . ' t free'
+                . ($carrier['capacity'] === null ? '' : "\nof " . fc_num((int) $carrier['capacity']) . ' t'),
         'inline' => true,
     ];
 
