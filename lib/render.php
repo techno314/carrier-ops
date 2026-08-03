@@ -581,6 +581,43 @@ function fc_render_balance_chart(array $carrier): void
  *
  * @return string[] short reasons, empty when nothing is wrong
  */
+/**
+ * How long this carrier can pay for itself, worked out once per request.
+ *
+ * Memoised because a fleet view asks the same question of the same carrier
+ * more than once -- for its warnings and for its card -- and each answer
+ * otherwise costs a crew lookup and a jump count.
+ *
+ * Jump fees are included, which the warnings did not previously do. The
+ * detail page has always counted them, so a carrier could be described as
+ * solvent for one number of weeks on its own page and another on the fleet
+ * view. Counting them everywhere is both the more accurate figure and the
+ * only way the two agree.
+ *
+ * @return array{weekly:int,weeks:?int,broke_at:?int,jump_fees:int}
+ */
+function fc_carrier_solvency(array $carrier): array
+{
+    static $cache = [];
+    $id = (int) $carrier['id'];
+    if (isset($cache[$id])) {
+        return $cache[$id];
+    }
+
+    $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $id]);
+    $lastTick = fc_last_upkeep_tick();
+    $jumps = (int) (fc_one(
+        'SELECT COUNT(*) AS n FROM fc_itinerary WHERE carrier_id = :id AND arrival_time >= :since',
+        ['id' => $id, 'since' => gmdate('Y-m-d H:i:s', $lastTick)],
+    )['n'] ?? 0);
+
+    return $cache[$id] = fc_solvency(
+        fc_upkeep($crew, $carrier),
+        $carrier['balance'] === null ? null : (int) $carrier['balance'],
+        $jumps,
+    );
+}
+
 function fc_carrier_warnings(array $carrier): array
 {
     $out = [];
@@ -595,8 +632,7 @@ function fc_carrier_warnings(array $carrier): array
     }
 
     if ($carrier['balance'] !== null) {
-        $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $carrier['id']]);
-        $solvency = fc_solvency(fc_upkeep($crew, $carrier), (int) $carrier['balance']);
+        $solvency = fc_carrier_solvency($carrier);
         if ($solvency['weeks'] !== null && $solvency['weeks'] < 2) {
             $out[] = $solvency['weeks'] < 1 ? 'Upkeep not covered' : 'Upkeep covered for under two weeks';
         }
@@ -667,6 +703,30 @@ function fc_render_carrier_card(array $carrier): void
               <div class="muted small" style="margin-top:4px"><?= fc_e(fc_ago($next['departure_time'])) ?></div>
             <?php endif; ?>
           </div>
+        </div>
+        <?php
+        // The same figure the carrier's own page gives, from the same helper,
+        // because a fleet view exists to spot the one that needs money and a
+        // number that disagreed with the detail page would be worse than none.
+        $solvency = fc_carrier_solvency($carrier);
+        ?>
+        <div class="stat">
+          <div class="k">Solvent for</div>
+          <?php if ($solvency['weeks'] === null): ?>
+            <div class="v sm muted">Unknown</div>
+          <?php elseif ($solvency['weeks'] === 0): ?>
+            <div class="v sm" style="color:var(--danger)">Under a week</div>
+            <div class="muted small" style="margin-top:4px">
+              by <?= fc_e(gmdate('j M', (int) $solvency['broke_at'])) ?>
+            </div>
+          <?php else: ?>
+            <div class="v sm"<?= $solvency['weeks'] < 4 ? ' style="color:var(--warn)"' : '' ?>>
+              <?= $solvency['weeks'] ?> week<?= $solvency['weeks'] === 1 ? '' : 's' ?>
+            </div>
+            <div class="muted small" style="margin-top:4px">
+              to <?= fc_e(gmdate('j M', (int) $solvency['broke_at'])) ?>
+            </div>
+          <?php endif; ?>
         </div>
       </div>
 
