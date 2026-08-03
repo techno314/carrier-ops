@@ -727,7 +727,36 @@ function fc_user(): ?array
     }
 
     $user = $row;
+    fc_touch_active($user);
     return $user;
+}
+
+/**
+ * How long between writes recording that somebody is still here.
+ *
+ * A page view is not worth a write of its own. At a minute, a session of any
+ * length costs about as many updates as it lasts in minutes, and the answer is
+ * never more than a minute out -- which is finer than anything reading it
+ * cares about, since it is displayed as "4m ago".
+ */
+const FC_ACTIVE_THROTTLE = 60;
+
+/**
+ * Note that this account is currently using the site.
+ *
+ * Only ever reached through fc_user, which resolves a browser cookie. The
+ * plugin authenticates with an API key and never comes this way, so an upload
+ * arriving from a machine whose owner is asleep does not count as them being
+ * online -- which is the whole distinction this column exists to draw.
+ */
+function fc_touch_active(array $user): void
+{
+    $last = $user['last_active'] ?? null;
+    if ($last !== null && time() - (int) strtotime((string) $last . ' UTC') < FC_ACTIVE_THROTTLE) {
+        return;
+    }
+
+    fc_exec('UPDATE fc_users SET last_active = UTC_TIMESTAMP() WHERE id = :id', ['id' => $user['id']]);
 }
 
 function fc_require_user(): array

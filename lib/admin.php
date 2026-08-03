@@ -305,7 +305,7 @@ function fc_render_admin(array $admin): void
             <thead>
             <tr>
               <th>Account</th><th>Frontier</th><th class="num">Carriers</th>
-              <th class="num">Uploads</th><th>Last seen</th><th>State</th><th></th>
+              <th class="num">Uploads</th><th>Online</th><th>Last seen</th><th>State</th><th></th>
             </tr>
             </thead>
             <tbody>
@@ -333,13 +333,22 @@ function fc_render_admin(array $admin): void
                 </td>
                 <td class="num"><?= (int) $u['carriers'] ?></td>
                 <td class="num"><?= (int) $u['uploads'] ?></td>
+                <?php
+                // Two different questions. `Online` is somebody with a page
+                // open; `Last seen` is any sign of them at all, including a
+                // plugin upload from a machine they are not sitting at.
+                $active = (string) ($u['last_active'] ?? '');
+                $seen = max($active, (string) ($u['last_activity'] ?? ''), (string) ($u['last_login'] ?? ''));
+                $onlineNow = $active !== '' && time() - (int) strtotime($active . ' UTC') < 300;
+                ?>
                 <td class="small muted nowrap">
-                  <?php
-                  // Whichever happened later: signing in, or sending data. Both
-                  // are the person being here, and taking only one of them
-                  // understates someone who does mostly the other.
-                  $seen = max((string) ($u['last_activity'] ?? ''), (string) ($u['last_login'] ?? ''));
-                  ?>
+                  <?php if ($onlineNow): ?>
+                    <span class="badge on">Now</span>
+                  <?php else: ?>
+                    <?= $active !== '' ? fc_e(fc_ago($active)) : '—' ?>
+                  <?php endif; ?>
+                </td>
+                <td class="small muted nowrap">
                   <?= $seen !== '' ? fc_e(fc_ago($seen)) : '—' ?>
                 </td>
                 <td>

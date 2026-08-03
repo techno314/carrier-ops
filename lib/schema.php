@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 14;
+const FC_SCHEMA_VERSION = 15;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -135,6 +135,14 @@ function fc_ensure_columns(): void
         'fc_squadron_members' => [
             'owner_cmdr_id' => 'INT UNSIGNED NULL',
             'pending_carrier' => 'VARCHAR(16) NULL',
+        ],
+
+        'fc_users' => [
+            // When this account last had a page open. Distinct from last_login,
+            // which only moves at sign-in and so goes stale for anyone who
+            // stays signed in, and from the upload log, which the plugin writes
+            // while nobody is at the keyboard.
+            'last_active' => 'DATETIME NULL',
         ],
     ];
 
@@ -323,6 +331,7 @@ function fc_schema_statements(): array
             is_banned TINYINT(1) NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL,
             last_login DATETIME NULL,
+            last_active DATETIME NULL,
             UNIQUE KEY fc_users_username (username),
             UNIQUE KEY fc_users_email (email),
             UNIQUE KEY fc_users_api_key (api_key_hash)
