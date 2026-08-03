@@ -64,10 +64,16 @@ const FC_CAPI_MIN_FETCH_INTERVAL = 900;
 // available in order to draw the nav prompt, and reaching that answer should
 // not drag the whole ingest stack in behind it.
 
-/** Must match what is registered with Frontier, exactly. */
+/**
+ * Must match what is registered with Frontier, exactly.
+ *
+ * Built literally rather than through fc_url(), which now strips the .php to
+ * keep addresses tidy. Frontier compares this string character for character,
+ * so tidiness is not on offer here.
+ */
 function fc_capi_redirect_uri(): string
 {
-    return fc_url('capi.php');
+    return fc_base_url() . '/fc/capi.php';
 }
 
 // ---------------------------------------------------------------------------

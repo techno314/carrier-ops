@@ -61,9 +61,55 @@ function fc_base_url(): string
     return rtrim(fc_env('PUBLIC_BASE_URL', 'https://grayflare.space'), '/');
 }
 
+/**
+ * A link into this app, without the `.php`.
+ *
+ * nginx maps /fc/settings onto settings.php, so nothing here needs to name the
+ * file. Callers still pass `settings.php` — the extension is the honest name of
+ * the thing on disk, and stripping it in one place beats remembering not to
+ * type it in fifty.
+ *
+ * Only a trailing `.php` goes, so `assets/style.css` and anything with a path
+ * after it are left alone.
+ */
 function fc_url(string $path = ''): string
 {
-    return fc_base_url() . '/fc/' . ltrim($path, '/');
+    $path = ltrim($path, '/');
+    $path = preg_replace('~^index\.php(?=$|\?)~', '', $path) ?? $path;
+    $path = preg_replace('~\.php(?=$|\?)~', '', $path) ?? $path;
+    return fc_base_url() . '/fc/' . $path;
+}
+
+/**
+ * Send `/fc/thing.php` to `/fc/thing`, so the address bar settles on one form.
+ *
+ * Only GETs, because a redirect is no way to treat a form submission, and not
+ * every page: capi.php is registered with Frontier as an exact OAuth
+ * redirect_uri, and api.php is the address already-installed EDMC plugins post
+ * to. Neither can move, whatever the address bar would prefer.
+ */
+function fc_canonicalise_url(): void
+{
+    if (PHP_SAPI === 'cli' || ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
+        return;
+    }
+
+    $uri = (string) ($_SERVER['REQUEST_URI'] ?? '');
+    $path = (string) (parse_url($uri, PHP_URL_PATH) ?? '');
+    if (!str_ends_with($path, '.php') || in_array(basename($path), ['capi.php', 'api.php'], true)) {
+        return;
+    }
+
+    $clean = substr($path, 0, -4);
+    if (str_ends_with($clean, '/index')) {
+        $clean = substr($clean, 0, -5);
+    }
+    $query = parse_url($uri, PHP_URL_QUERY);
+
+    // 302, not 301. A permanent redirect is cached by the browser for good, and
+    // this is a presentation choice that ought to stay reversible.
+    header('Location: ' . $clean . ($query === null || $query === '' ? '' : '?' . $query), true, 302);
+    exit;
 }
 
 /**
@@ -983,4 +1029,5 @@ function fc_render_flash(): void
 // rather than at the top of each page on purpose: this file is the one thing
 // every entry point already includes, and a guard that has to be repeated nine
 // times is a guard that will one day be missing from one of them.
+fc_canonicalise_url();
 fc_maintenance_guard();
