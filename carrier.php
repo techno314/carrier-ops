@@ -767,10 +767,14 @@ case 'manage':
                    value="<?= fc_e($hook['label'] ?? '') ?>" placeholder="Squadron channel">
           </div>
 
+          <?php $posted = (int) (fc_one(
+              'SELECT COUNT(*) AS n FROM fc_webhook_messages WHERE webhook_id = :w AND message_id IS NOT NULL',
+              ['w' => $hook['id']],
+          )['n'] ?? 0); ?>
           <p class="small dim">
-            <?= $hook['board_message_id'] === null
-                ? 'No message posted yet — one appears the next time anything changes.'
-                : 'Posted and being edited in place. Pin it so it stays findable.' ?>
+            <?= $posted === 0
+                ? 'Nothing posted yet — messages appear as the carrier does things.'
+                : $posted . ' message' . ($posted === 1 ? '' : 's') . ' posted and being edited in place. Pin them so they stay findable.' ?>
           </p>
           <div class="check">
             <input type="checkbox" id="fin<?= (int) $hook['id'] ?>" name="show_finance" <?= (int) $hook['show_finance'] === 1 ? 'checked' : '' ?>>

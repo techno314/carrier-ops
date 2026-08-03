@@ -3,11 +3,18 @@
 declare(strict_types=1);
 
 /**
- * A carrier's status board in Discord.
+ * A carrier's boards in Discord.
  *
- * One message per webhook, edited in place, showing where the carrier is and
- * what state it is in. Never a stream of posts: a channel following an active
- * carrier would fill with one-line messages and bury the thing worth reading.
+ * One message per topic -- what the carrier is, where it is jumping, what it
+ * is trading -- and each is edited for ever after it is first posted. Never a
+ * message per event: a channel following an active carrier would fill with
+ * one-line posts and bury the thing worth reading.
+ *
+ * The topic is the unit because that is how the information actually behaves.
+ * A buy order appears, sits there, and is eventually filled; all three belong
+ * to the same paragraph, so all three happen inside the one message the order
+ * first appeared in. A jump is plotted, maybe cancelled, eventually completed;
+ * same message throughout.
  *
  * That is why any of this keeps message ids. A webhook POST normally answers
  * `204 No Content` and tells you nothing about what it just created; posting
@@ -136,23 +143,91 @@ function fc_webhook_board_refresh(int $carrierId): void
     }
 
     foreach ($hooks as $hook) {
-        $embed = fc_webhook_board_embed($carrier, (int) $hook['show_finance'] === 1);
-        $payload = ['embeds' => [$embed]];
+        foreach (fc_board_topics() as $topic) {
+            $embed = fc_board_embed($topic, $carrier, $hook);
+            $row = fc_board_message($hook['id'], $topic);
 
-        // Hash what the board *says*, not when it was built. The embed carries
-        // an "updated" timestamp of now, so hashing the payload whole would
-        // differ on every upload and this check would never once suppress a
-        // request -- an edit costs Discord a call whether or not the board
-        // actually changed.
-        $stable = $embed;
-        unset($stable['timestamp'], $stable['footer']);
-        $hash = sha1(json_encode($stable));
-        if ($hash === $hook['board_hash']) {
-            continue;
+            if ($embed === null) {
+                continue;   // this topic is switched off for this carrier
+            }
+
+            // A topic that has never had anything to say does not get a
+            // message just to say so. Once one exists it is kept up to date
+            // for ever, including when it becomes empty again -- an order
+            // that fills should visibly disappear from the message it was
+            // announced in, not take the message with it.
+            if ($row === null && fc_board_is_empty($topic, $carrier)) {
+                continue;
+            }
+
+            $payload = ['embeds' => [$embed]];
+
+            // Hash what the message *says*, not when it was built. The embed
+            // carries an "updated" timestamp of now, so hashing the payload
+            // whole would differ every time and this check would never once
+            // suppress a request -- an edit costs Discord a call whether or
+            // not anything actually changed.
+            $stable = $embed;
+            unset($stable['timestamp'], $stable['footer']);
+            $hash = sha1(json_encode($stable));
+            if ($row !== null && $hash === $row['content_hash']) {
+                continue;
+            }
+
+            fc_exec(
+                'INSERT INTO fc_webhook_messages (webhook_id, topic, content_hash, created_at)
+                 VALUES (:w, :t, :h, UTC_TIMESTAMP())
+                 ON DUPLICATE KEY UPDATE content_hash = VALUES(content_hash)',
+                ['w' => $hook['id'], 't' => $topic, 'h' => $hash],
+            );
+
+            fc_webhook_enqueue((int) $hook['id'], $topic, $payload, sha1($hook['id'] . '|' . $topic . '|' . $hash));
         }
-        fc_exec('UPDATE fc_webhooks SET board_hash = :h WHERE id = :id', ['h' => $hash, 'id' => $hook['id']]);
-        fc_webhook_enqueue((int) $hook['id'], 'board', $payload, sha1($hook['id'] . '|board|' . $hash));
     }
+}
+
+/** The stored message for one webhook and topic, if it has ever been posted. */
+function fc_board_message(int|string $webhookId, string $topic): ?array
+{
+    return fc_one(
+        'SELECT * FROM fc_webhook_messages WHERE webhook_id = :w AND topic = :t',
+        ['w' => $webhookId, 't' => $topic],
+    );
+}
+
+/**
+ * Whether a topic has nothing worth a message of its own yet.
+ *
+ * Only consulted before the first post. Status always qualifies -- a carrier
+ * always has a position and a name -- but there is no sense in opening a
+ * market message for a carrier that has never traded.
+ */
+function fc_board_is_empty(string $topic, array $carrier): bool
+{
+    $id = (int) $carrier['id'];
+    return match ($topic) {
+        'jumps' => (int) fc_one(
+            "SELECT (SELECT COUNT(*) FROM fc_jumps WHERE carrier_id = :a AND status = 'scheduled'
+                       AND departure_time > UTC_TIMESTAMP())
+                  + (SELECT COUNT(*) FROM fc_itinerary WHERE carrier_id = :b AND departure_time IS NOT NULL) AS n",
+            ['a' => $id, 'b' => $id],
+        )['n'] === 0,
+        'market' => (int) fc_one('SELECT COUNT(*) AS n FROM fc_orders WHERE carrier_id = :i', ['i' => $id])['n'] === 0,
+        default => false,
+    };
+}
+
+/**
+ * The topics a webhook keeps a message for.
+ *
+ * Ordered as they are first posted, so a fresh channel reads top to bottom:
+ * what the carrier is, then where it is going, then what it will trade.
+ *
+ * @return string[]
+ */
+function fc_board_topics(): array
+{
+    return ['status', 'jumps', 'market'];
 }
 
 /**
@@ -286,24 +361,55 @@ function fc_board_trading(int $carrierId): string
 }
 
 /**
- * What the board says.
+ * The parts every message shares.
  *
- * Laid out for the glance it actually gets. The two things anyone opens the
- * channel for -- where the carrier is, and whether it is about to move -- are
- * the description, so they read as sentences at the top. Everything else is
- * inline fields, deliberately in groups of three, because Discord lays inline
- * fields three to a row and any other number leaves a ragged half-row.
+ * Modelled on how FCMS presents a carrier: an attributed embed with a titled
+ * subject, a sentence naming the carrier, and a picture of it. Only the
+ * presentation is borrowed -- FCMS posts a fresh message per event, which is
+ * the one thing these boards deliberately do not do.
  */
-function fc_webhook_board_embed(array $carrier, bool $withFinance): array
+function fc_board_chrome(array $carrier, string $title, string $sentence, int $colour, string $tab = ''): array
 {
-    // --- where it is, and where it is going ------------------------------
-    $system = fc_discord_escape($carrier['system'] ?? null);
-    $body = fc_discord_escape($carrier['body'] ?? null);
-    $lines = [];
-    $lines[] = $system === ''
-        ? '📍 Position unknown'
-        : '📍 **' . $system . '**' . ($body === '' ? '' : ' · ' . $body);
+    return [
+        'title' => $title,
+        'url' => fc_carrier_link($carrier) . $tab,
+        'description' => $sentence,
+        'color' => $colour,
+        'author' => [
+            'name' => fc_webhook_carrier_title($carrier),
+            'url' => fc_carrier_link($carrier),
+        ],
+        // Served by nginx as a static file, so Discord can still fetch it while
+        // the board itself is closed for maintenance.
+        'thumbnail' => ['url' => fc_base_url() . '/fc/assets/carrier-512.jpg'],
+        'footer' => ['text' => 'Carrier Ops'],
+        'timestamp' => gmdate('c'),
+    ];
+}
 
+/** "V4H-84Q THE TOXINS", as FCMS words it in a webhook sentence. */
+function fc_board_subject(array $carrier): string
+{
+    $callsign = $carrier['callsign'] ?? null;
+    $name = fc_discord_escape($carrier['name'] ?? null);
+    return trim(($callsign === null ? '' : '**' . $callsign . '** ') . $name) ?: 'This carrier';
+}
+
+/**
+ * The status message: what the carrier is and what it offers.
+ */
+function fc_board_status_embed(array $carrier, bool $withFinance): array
+{
+    $system = fc_discord_escape($carrier['system'] ?? null);
+    $sentence = fc_board_subject($carrier)
+        . ($system === '' ? ' is somewhere unrecorded.' : ' is at **' . $system . '**.');
+
+    $fields = [];
+
+    $where = $system === '' ? 'Unknown' : $system;
+    if (($carrier['body'] ?? null) !== null && $carrier['body'] !== '') {
+        $where .= "\n" . fc_discord_escape((string) $carrier['body']);
+    }
     // How long it has been parked. The stop has to still be open *and* name the
     // system the carrier is actually in: a stale open stop from somewhere else
     // would otherwise report an arrival that never happened here.
@@ -315,64 +421,28 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
             ['cid' => $carrier['id'], 'sys' => $carrier['system']],
         );
         if ($stop !== null) {
-            $since = strtotime((string) $stop['arrival_time'] . ' UTC');
-            $lines[0] .= ' · here since <t:' . $since . ':R>';
+            $where .= "\nSince <t:" . strtotime((string) $stop['arrival_time'] . ' UTC') . ':R>';
         }
     }
+    $fields[] = ['name' => 'Current Location', 'value' => $where, 'inline' => true];
 
-    $next = fc_one(
-        "SELECT * FROM fc_jumps
-          WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time > UTC_TIMESTAMP()
-          ORDER BY departure_time ASC LIMIT 1",
-        ['cid' => $carrier['id']],
-    );
-    if ($next !== null) {
-        $at = strtotime((string) $next['departure_time'] . ' UTC');
-        // DepartureTime is when the carrier *arrives*, not when it leaves.
-        $lines[] = '🚀 Jumping to **' . fc_discord_escape((string) ($next['system'] ?? '?'))
-            . '** — arrives <t:' . $at . ':R>';
-    }
-
-    $motd = trim((string) ($carrier['motd'] ?? ''));
-    if ($motd !== '') {
-        $lines[] = '';
-        $lines[] = '> ' . str_replace("\n", "\n> ", fc_discord_escape($motd));
-    }
-
-    // --- the row of three -------------------------------------------------
-    $fuel = $carrier['fuel_level'] === null ? null : (int) $carrier['fuel_level'];
-    $fields = [
-        [
-            'name' => 'Docking',
-            // Notorious access belongs with docking rather than in a field of
-            // its own: it is a qualifier on who may dock, and it is the second
-            // thing anyone checks after the first.
-            'value' => fc_docking_label($carrier['docking_access'])
-                . ($carrier['allow_notorious'] === null
-                    ? ''
-                    : ((int) $carrier['allow_notorious'] === 1
-                        ? "\nNotorious welcome"
-                        : "\nNo notorious")),
-            'inline' => true,
-        ],
-        [
-            'name' => 'Tritium',
-            'value' => $fuel === null
-                ? '—'
-                : fc_num($fuel) . ' t' . ($fuel <= FC_WEBHOOK_LOW_FUEL ? ' ⚠️' : ''),
-            'inline' => true,
-        ],
-        [
-            'name' => 'Free space',
-            'value' => $carrier['space_free'] === null ? '—' : fc_num((int) $carrier['space_free']) . ' t',
-            'inline' => true,
-        ],
+    $fields[] = [
+        'name' => 'Docking Access',
+        'value' => fc_docking_label($carrier['docking_access'])
+            . ($carrier['allow_notorious'] === null
+                ? ''
+                : "\n" . ((int) $carrier['allow_notorious'] === 1 ? 'Notorious welcome' : 'No notorious')),
+        'inline' => true,
     ];
 
-    // --- what a visitor would want to know --------------------------------
-    //
-    // Full-width rather than inline: these are lists, and a third of an embed
-    // is not enough width for one without it wrapping into nonsense.
+    $fuel = $carrier['fuel_level'] === null ? null : (int) $carrier['fuel_level'];
+    $fields[] = [
+        'name' => 'Tritium',
+        'value' => ($fuel === null ? '—' : fc_num($fuel) . ' t' . ($fuel <= FC_WEBHOOK_LOW_FUEL ? ' ⚠️' : ''))
+            . "\n" . ($carrier['space_free'] === null ? '' : fc_num((int) $carrier['space_free']) . ' t free'),
+        'inline' => true,
+    ];
+
     $services = fc_board_services((int) $carrier['id']);
     if ($services !== '') {
         $fields[] = ['name' => 'Services', 'value' => mb_substr($services, 0, 1024), 'inline' => false];
@@ -383,16 +453,6 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
         $fields[] = ['name' => 'Taxes', 'value' => $taxes, 'inline' => false];
     }
 
-    // The carrier's own market switch decides this, the same as it does on the
-    // website -- one setting, not two that can disagree.
-    if ((int) ($carrier['show_market'] ?? 1) === 1) {
-        $trading = fc_board_trading((int) $carrier['id']);
-        if ($trading !== '') {
-            $fields[] = ['name' => 'Trading', 'value' => mb_substr($trading, 0, 1024), 'inline' => false];
-        }
-    }
-
-    // --- and a second row, only when finance is being shown ---------------
     if ($withFinance && $carrier['balance'] !== null) {
         $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $carrier['id']]);
         $upkeep = fc_upkeep($crew, $carrier);
@@ -402,25 +462,166 @@ function fc_webhook_board_embed(array $carrier, bool $withFinance): array
         $fields[] = ['name' => 'Balance', 'value' => fc_cr((int) $carrier['balance']) . ' cr', 'inline' => true];
         $fields[] = ['name' => 'Upkeep', 'value' => fc_cr($upkeep['total']) . ' cr/wk', 'inline' => true];
         $fields[] = [
-            'name' => 'Covered for',
+            'name' => 'Covered For',
             'value' => $span === null ? '—' : $span . (($solvency['weeks'] ?? 99) < 2 ? ' ⚠️' : ''),
             'inline' => true,
         ];
     }
 
-    return [
-        'title' => fc_webhook_carrier_title($carrier),
-        'url' => fc_carrier_link($carrier),
-        'description' => implode("\n", $lines),
-        'color' => ($fuel !== null && $fuel <= FC_WEBHOOK_LOW_FUEL) ? 0xf59e0b : 0x38bdf8,
-        'fields' => $fields,
-        // A picture of a Drake-Class, the same one the site uses. Served by
-        // nginx as a static file, so Discord can still fetch it while the
-        // board itself is closed for maintenance.
-        'thumbnail' => ['url' => fc_base_url() . '/fc/assets/carrier-512.jpg'],
-        'footer' => ['text' => 'Carrier Ops'],
-        'timestamp' => gmdate('c'),
+    $motd = trim((string) ($carrier['motd'] ?? ''));
+    if ($motd !== '') {
+        $fields[] = ['name' => 'Message', 'value' => mb_substr(fc_discord_escape($motd), 0, 1024), 'inline' => false];
+    }
+
+    $embed = fc_board_chrome(
+        $carrier,
+        'Carrier Status',
+        $sentence,
+        ($fuel !== null && $fuel <= FC_WEBHOOK_LOW_FUEL) ? 0xf59e0b : 0x38bdf8,
+    );
+    $embed['fields'] = $fields;
+    return $embed;
+}
+
+/**
+ * The jumps message: where it is going, and where it has been.
+ *
+ * One message for the whole subject, titled after whatever it is currently
+ * saying. A jump plotted here is the same jump cancelled or completed here
+ * later -- the message is rewritten, not replaced.
+ */
+function fc_board_jumps_embed(array $carrier): array
+{
+    $here = fc_discord_escape($carrier['system'] ?? null) ?: 'an unrecorded system';
+
+    $next = fc_one(
+        "SELECT * FROM fc_jumps
+          WHERE carrier_id = :cid AND status = 'scheduled' AND departure_time > UTC_TIMESTAMP()
+          ORDER BY departure_time ASC LIMIT 1",
+        ['cid' => $carrier['id']],
+    );
+
+    $fields = [];
+    if ($next !== null) {
+        // DepartureTime is when the carrier *arrives*, not when it leaves.
+        $at = strtotime((string) $next['departure_time'] . ' UTC');
+        $title = 'Scheduled Jump';
+        $sentence = fc_board_subject($carrier) . ' has scheduled a jump.';
+        $colour = 0x3b82f6;
+
+        $fields[] = ['name' => 'Departing From', 'value' => $here, 'inline' => true];
+        $fields[] = [
+            'name' => 'Headed To',
+            'value' => fc_discord_escape((string) ($next['system'] ?? '?'))
+                . (($next['body'] ?? null) === null ? '' : "\n" . fc_discord_escape((string) $next['body'])),
+            'inline' => true,
+        ];
+        $fields[] = [
+            'name' => 'Arrival Time',
+            'value' => '<t:' . $at . ':t>' . "\n" . '<t:' . $at . ':R>',
+            'inline' => true,
+        ];
+    } else {
+        $title = 'Standing By';
+        $sentence = fc_board_subject($carrier) . ' has no jump plotted.';
+        $colour = 0x6b7280;
+        $fields[] = ['name' => 'Staying Right Here In', 'value' => $here, 'inline' => true];
+    }
+
+    // Where it has been. Only closed stops: the open one is the current
+    // position, which the status message already leads with.
+    $stops = fc_all(
+        'SELECT system, arrival_time FROM fc_itinerary
+          WHERE carrier_id = :cid AND departure_time IS NOT NULL
+          ORDER BY arrival_time DESC LIMIT 5',
+        ['cid' => $carrier['id']],
+    );
+    if ($stops !== []) {
+        $rows = [];
+        foreach ($stops as $stop) {
+            $rows[] = '**' . fc_discord_escape((string) $stop['system']) . '** — <t:'
+                . strtotime((string) $stop['arrival_time'] . ' UTC') . ':R>';
+        }
+        $fields[] = ['name' => 'Previously', 'value' => implode("\n", $rows), 'inline' => false];
+    }
+
+    $embed = fc_board_chrome($carrier, $title, $sentence, $colour, '&tab=itinerary');
+    $embed['fields'] = $fields;
+    return $embed;
+}
+
+/**
+ * The market message: what it will buy and sell.
+ *
+ * An order that is later filled simply stops being listed here, in the message
+ * it was first announced in -- which is the whole point of keeping one.
+ *
+ * Laid out as FCMS lays out a market notification: each order is three inline
+ * fields, so Discord puts one order per row.
+ */
+function fc_board_market_embed(array $carrier): ?array
+{
+    // The carrier's own market switch decides this, the same as it does on the
+    // website -- one setting, not two that can disagree.
+    if ((int) ($carrier['show_market'] ?? 1) !== 1) {
+        return null;
+    }
+
+    $rows = fc_all(
+        'SELECT * FROM fc_orders WHERE carrier_id = :i ORDER BY kind DESC, amount DESC',
+        ['i' => (int) $carrier['id']],
+    );
+
+    $fields = [];
+    // Six orders is eighteen fields; Discord allows twenty-five in an embed.
+    foreach (array_slice($rows, 0, 6) as $row) {
+        $fields[] = [
+            'name' => (string) $row['kind'] === 'buy' ? '🟢 Buying' : '🔵 Selling',
+            'value' => fc_discord_escape($row['loc_name'] ?: ucfirst((string) $row['commodity']))
+                . ((int) $row['black_market'] === 1 ? "\n*black market*" : ''),
+            'inline' => true,
+        ];
+        $fields[] = ['name' => 'For', 'value' => fc_cr((int) $row['price']) . ' cr', 'inline' => true];
+        $fields[] = ['name' => 'Quantity', 'value' => fc_num((int) $row['amount']) . ' t', 'inline' => true];
+    }
+
+    if (count($rows) > 6) {
+        $fields[] = ['name' => 'And', 'value' => (count($rows) - 6) . ' more orders', 'inline' => false];
+    }
+
+    $fields[] = [
+        'name' => 'Current Location',
+        'value' => fc_discord_escape($carrier['system'] ?? null) ?: 'Unknown',
+        'inline' => true,
     ];
+    $fields[] = [
+        'name' => 'Docking Access',
+        'value' => fc_docking_label($carrier['docking_access']),
+        'inline' => true,
+    ];
+
+    $embed = fc_board_chrome(
+        $carrier,
+        $rows === [] ? 'Market Closed' : 'Market Update',
+        $rows === []
+            ? fc_board_subject($carrier) . ' has no standing orders.'
+            : fc_board_subject($carrier) . ' has issued a market notification.',
+        $rows === [] ? 0x6b7280 : 0x22c55e,
+        '&tab=market',
+    );
+    $embed['fields'] = $fields;
+    return $embed;
+}
+
+/** Build one topic's embed, or null when that topic has nothing to say. */
+function fc_board_embed(string $topic, array $carrier, array $hook): ?array
+{
+    return match ($topic) {
+        'status' => fc_board_status_embed($carrier, (int) $hook['show_finance'] === 1),
+        'jumps' => fc_board_jumps_embed($carrier),
+        'market' => fc_board_market_embed($carrier),
+        default => null,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +669,7 @@ function fc_webhook_flush_after_response(): void
 function fc_webhook_flush(): int
 {
     $due = fc_all(
-        'SELECT q.*, w.url, w.board_message_id, w.enabled
+        'SELECT q.*, w.url, w.enabled
            FROM fc_webhook_queue q
            JOIN fc_webhooks w ON w.id = q.webhook_id
           WHERE q.next_attempt_at <= UTC_TIMESTAMP()
@@ -491,9 +692,13 @@ function fc_webhook_flush(): int
             continue;
         }
 
-        $result = $item['kind'] === 'board'
-            ? fc_discord_board_send((int) $item['webhook_id'], (string) $item['url'], $item['board_message_id'], $payload)
-            : fc_discord_send((string) $item['url'], $payload);
+        // Everything a webhook sends is a topic message; there is no other kind.
+        $result = fc_discord_board_send(
+            (int) $item['webhook_id'],
+            (string) $item['kind'],
+            (string) $item['url'],
+            $payload,
+        );
 
         if ($result['ok']) {
             fc_exec('DELETE FROM fc_webhook_queue WHERE id = :id', ['id' => $item['id']]);
@@ -553,25 +758,37 @@ function fc_webhook_flush(): int
  * afterwards. If the stored message has since been deleted by hand, Discord
  * answers 404 and we post a fresh one rather than giving up on the board.
  */
-function fc_discord_board_send(int $webhookId, string $url, ?string $messageId, array $payload): array
+function fc_discord_board_send(int $webhookId, string $topic, string $url, array $payload): array
 {
+    $row = fc_board_message($webhookId, $topic);
+    $messageId = $row['message_id'] ?? null;
+
     if ($messageId !== null) {
         $result = fc_discord_send($url . '/messages/' . rawurlencode($messageId), $payload, 'PATCH');
         if ($result['ok']) {
+            fc_exec(
+                'UPDATE fc_webhook_messages SET updated_at = UTC_TIMESTAMP() WHERE webhook_id = :w AND topic = :t',
+                ['w' => $webhookId, 't' => $topic],
+            );
             return $result;
         }
         if ($result['status'] !== 404) {
             return $result;
         }
         // Deleted at the far end. Forget it and fall through to a new post.
-        fc_exec('UPDATE fc_webhooks SET board_message_id = NULL WHERE id = :id', ['id' => $webhookId]);
+        fc_exec(
+            'UPDATE fc_webhook_messages SET message_id = NULL WHERE webhook_id = :w AND topic = :t',
+            ['w' => $webhookId, 't' => $topic],
+        );
     }
 
     $result = fc_discord_send($url . '?wait=true', $payload);
     if ($result['ok'] && ($result['message_id'] ?? null) !== null) {
         fc_exec(
-            'UPDATE fc_webhooks SET board_message_id = :m WHERE id = :id',
-            ['m' => $result['message_id'], 'id' => $webhookId],
+            'INSERT INTO fc_webhook_messages (webhook_id, topic, message_id, updated_at, created_at)
+             VALUES (:w, :t, :m, UTC_TIMESTAMP(), UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE message_id = VALUES(message_id), updated_at = UTC_TIMESTAMP()',
+            ['w' => $webhookId, 't' => $topic, 'm' => $result['message_id']],
         );
     }
     return $result;
@@ -717,7 +934,7 @@ function fc_handle_webhook_post(string $action, array $carrier): void
         fc_exec(
             'UPDATE fc_webhooks
                 SET label = :label, show_finance = :fin, board_enabled = :board,
-                    enabled = :on, board_hash = NULL, fail_count = 0, last_error = NULL
+                    enabled = :on, fail_count = 0, last_error = NULL
               WHERE id = :id',
             [
                 'label' => mb_substr(trim((string) ($_POST['label'] ?? '')), 0, 64) ?: null,
@@ -729,6 +946,10 @@ function fc_handle_webhook_post(string $action, array $carrier): void
                 'id' => $hook['id'],
             ],
         );
+        // Clearing the hashes makes the next refresh rewrite every message,
+        // so a settings change is visible immediately rather than waiting for
+        // the carrier to do something.
+        fc_exec('UPDATE fc_webhook_messages SET content_hash = NULL WHERE webhook_id = :w', ['w' => $hook['id']]);
         fc_webhook_board_refresh($carrierId);
         fc_webhook_flush_after_response();
         fc_flash('Webhook saved.');

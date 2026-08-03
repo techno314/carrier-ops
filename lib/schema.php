@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 12;
+const FC_SCHEMA_VERSION = 13;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -59,10 +59,14 @@ function fc_migrate(): void
         $db->exec($sql);
     }
     fc_ensure_columns();
-    fc_drop_columns();
-    fc_drop_tables();
+    // Backfills run before anything is dropped. A one-off fix that carries data
+    // out of a column into a new home cannot do that once the column is gone,
+    // and it fails silently when it tries -- which is exactly what happened
+    // moving board_message_id into fc_webhook_messages.
     fc_migrate_capi_tokens();
     fc_backfill();
+    fc_drop_columns();
+    fc_drop_tables();
 
     // Record it in the database too, so a wiped sentinel does not hide which
     // version the live tables are actually at.
@@ -147,6 +151,29 @@ function fc_ensure_columns(): void
  */
 function fc_backfill(): void
 {
+    // The board used to be one message, its id on fc_webhooks. Carry it across
+    // as the `status` topic so an existing board keeps being edited rather than
+    // being abandoned and reposted.
+    $done = fc_one("SELECT v FROM fc_meta WHERE k = 'webhook_topics_migrated'") !== null;
+    $column = (int) fc_one(
+        "SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fc_webhooks'
+            AND COLUMN_NAME = 'board_message_id'"
+    )['n'];
+
+    if (!$done && $column > 0) {
+        foreach (fc_all('SELECT id, board_message_id FROM fc_webhooks WHERE board_message_id IS NOT NULL') as $row) {
+            fc_exec(
+                "INSERT IGNORE INTO fc_webhook_messages (webhook_id, topic, message_id, created_at)
+                 VALUES (:w, 'status', :m, UTC_TIMESTAMP())",
+                ['w' => $row['id'], 'm' => $row['board_message_id']],
+            );
+        }
+        fc_exec(
+            "INSERT INTO fc_meta (k, v) VALUES ('webhook_topics_migrated', '1')
+             ON DUPLICATE KEY UPDATE v = v"
+        );
+    }
 }
 
 /**
@@ -164,8 +191,9 @@ function fc_drop_columns(): void
     $unwanted = [
         'fc_users' => ['discord_id', 'email_verified_at'],
         // Per-event subscriptions had nothing left to filter once the board
-        // stopped listing individual events.
-        'fc_webhooks' => ['events'],
+        // stopped listing individual events. board_message_id and board_hash
+        // moved to fc_webhook_messages when one board became several.
+        'fc_webhooks' => ['events', 'board_message_id', 'board_hash'],
     ];
 
     $db = fc_db();
@@ -531,6 +559,27 @@ function fc_schema_statements(): array
             KEY fc_resets_user (user_id, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
+        // One Discord message per webhook per topic, edited for ever after.
+        //
+        // Not one message holding everything, and not a message per event.
+        // Each topic -- the carrier's state, its jumps, its market -- owns a
+        // message, and anything that changes within a topic rewrites that
+        // message. A buy order that is later filled updates the market message
+        // it first appeared in rather than adding a second one.
+        //
+        // content_hash is what makes that cheap: an edit that would not change
+        // a single character is never sent.
+        "CREATE TABLE IF NOT EXISTS fc_webhook_messages (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            webhook_id INT UNSIGNED NOT NULL,
+            topic VARCHAR(16) NOT NULL,
+            message_id VARCHAR(32) NULL,
+            content_hash CHAR(40) NULL,
+            updated_at DATETIME NULL,
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY fc_webhook_messages_topic (webhook_id, topic)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
         // A Discord webhook the owner has pointed at one of their carriers.
         // board_message_id is the message the status board keeps editing; it is
         // only ever obtained by posting with ?wait=true, since a plain webhook
@@ -543,8 +592,6 @@ function fc_schema_statements(): array
             url VARCHAR(255) NOT NULL,
             show_finance TINYINT(1) NOT NULL DEFAULT 0,
             board_enabled TINYINT(1) NOT NULL DEFAULT 0,
-            board_message_id VARCHAR(32) NULL,
-            board_hash CHAR(40) NULL,
             enabled TINYINT(1) NOT NULL DEFAULT 1,
             fail_count INT NOT NULL DEFAULT 0,
             last_error VARCHAR(255) NULL,
