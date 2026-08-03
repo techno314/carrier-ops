@@ -57,6 +57,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             fc_flash('Password changed. Other sessions were signed out.');
             fc_redirect(fc_url('settings.php'));
         }
+    } elseif ($action === 'bind_squadron') {
+        // Frontier reports a squadron carrier with no id of any kind, so the
+        // only way to know which row it is is to be told. Restricted to the
+        // squadron's owner, and to rows nobody else has a claim on.
+        $linkId = (int) ($_POST['link'] ?? 0);
+        $carrierId = (int) ($_POST['carrier'] ?? 0);
+
+        $member = fc_one(
+            'SELECT * FROM fc_squadron_members WHERE link_id = :l AND user_id = :u',
+            ['l' => $linkId, 'u' => $user['id']],
+        );
+        $row = $carrierId > 0 ? fc_carrier($carrierId) : null;
+
+        if ($member === null) {
+            $error = 'That Frontier link is not on this account.';
+        } elseif ($member['owner_cmdr_id'] === null
+            || (int) $member['owner_cmdr_id'] !== (int) ($member['cmdr_id'] ?? 0)) {
+            $error = 'Only the squadron\'s owner can identify its carrier.';
+        } elseif ($row === null) {
+            $error = 'No carrier with that id.';
+        } elseif ($row['owner_user_id'] !== null || $row['squadron_id'] !== null) {
+            $error = 'That carrier already belongs to someone.';
+        } else {
+            fc_update_carrier($carrierId, [
+                'squadron_id' => (int) $member['squadron_id'],
+                'squadron_name' => $member['squadron_name'],
+                'squadron_tag' => $member['squadron_tag'],
+            ]);
+            // Now that it is bound, an ordinary sync fills it in: fc_squadron_bind
+            // finds the row by its squadron id and everything else follows.
+            $sync = fc_capi_sync($user, $linkId, true);
+            fc_flash($sync['error'] === null
+                ? 'Squadron carrier identified. Its details will fill in from Frontier.'
+                : 'Squadron carrier identified, but the fetch that follows failed: ' . $sync['error']);
+            fc_redirect(fc_url('settings.php'));
+        }
     } elseif ($action === 'newkey') {
         // Shown once and stored hashed, so a leak of the table does not hand
         // out working keys.
@@ -149,6 +185,108 @@ fc_head('Settings', 'settings');
       <p class="small dim" style="margin-bottom:0">No Frontier client id is configured on this deployment.</p>
     <?php endif; ?>
   </div>
+
+  <?php
+  $squadrons = fc_all(
+      'SELECT * FROM fc_squadron_members WHERE user_id = :u ORDER BY squadron_name',
+      ['u' => $user['id']],
+  );
+  ?>
+  <?php if ($squadrons !== []): ?>
+    <div class="card">
+      <h2>Squadrons</h2>
+      <p class="muted small">
+        Read from Frontier alongside your carrier. A squadron carrier belongs to the squadron rather than to
+        anyone in it, so it shows on your dashboard for as long as you are a member — no claiming involved.
+      </p>
+
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Squadron</th><th>Rank</th><th>Carrier</th><th></th></tr></thead>
+          <tbody>
+          <?php foreach ($squadrons as $squadron): ?>
+            <?php
+            $bound = fc_one(
+                'SELECT * FROM fc_carriers WHERE squadron_id = :sq LIMIT 1',
+                ['sq' => $squadron['squadron_id']],
+            );
+            $isOwner = $squadron['owner_cmdr_id'] !== null
+                && (int) $squadron['owner_cmdr_id'] === (int) ($squadron['cmdr_id'] ?? 0);
+            ?>
+            <tr>
+              <td>
+                <?= fc_e($squadron['squadron_name'] ?? '—') ?>
+                <div class="callsign small"><?= fc_e($squadron['squadron_tag'] ?? '') ?></div>
+              </td>
+              <td>
+                <?= fc_e($squadron['rank_name'] ?? '—') ?>
+                <?php if ($isOwner): ?><span class="badge on">Owner</span><?php endif; ?>
+              </td>
+              <td>
+                <?php if ($bound !== null): ?>
+                  <a href="<?= fc_e(fc_carrier_link($bound)) ?>">
+                    <?= fc_e(fc_carrier_display_name($bound)) ?>
+                  </a>
+                <?php elseif ($squadron['pending_carrier'] !== null): ?>
+                  <span class="badge warn">Not identified</span>
+                  <div class="dim small">callsign <?= fc_e((string) $squadron['pending_carrier']) ?></div>
+                <?php else: ?>
+                  <span class="muted small">None</span>
+                <?php endif; ?>
+              </td>
+              <td class="right"></td>
+            </tr>
+
+            <?php if ($bound === null && $squadron['pending_carrier'] !== null && $isOwner): ?>
+              <?php
+              // Candidates are carriers nobody has claimed, which is what a
+              // squadron carrier looks like when it arrives from a journal:
+              // CarrierLocation gives its id and its position and no name at
+              // all, so an unnamed row is the likeliest match by far.
+              $candidates = fc_all(
+                  "SELECT * FROM fc_carriers
+                    WHERE owner_user_id IS NULL AND squadron_id IS NULL
+                      AND (callsign IS NULL OR callsign = :cs)
+                    ORDER BY (callsign = :cs) DESC, updated_at DESC
+                    LIMIT 10",
+                  ['cs' => $squadron['pending_carrier']],
+              );
+              ?>
+              <tr>
+                <td colspan="4">
+                  <?php if ($candidates === []): ?>
+                    <p class="muted small" style="margin:0">
+                      Frontier says this squadron has a carrier but gives it no id, and nothing on the board
+                      matches it yet. Upload a journal from a session where you were aboard or alongside it —
+                      <code>CarrierLocation</code> carries the id we need.
+                    </p>
+                  <?php else: ?>
+                    <p class="muted small">
+                      Frontier gives a squadron carrier no id, so it has to be matched by hand. These are the
+                      carriers on the board that nobody has claimed:
+                    </p>
+                    <?php foreach ($candidates as $candidate): ?>
+                      <form method="post" style="display:inline-block;margin:0 8px 8px 0">
+                        <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+                        <input type="hidden" name="action" value="bind_squadron">
+                        <input type="hidden" name="link" value="<?= (int) $squadron['link_id'] ?>">
+                        <input type="hidden" name="carrier" value="<?= fc_e((string) $candidate['id']) ?>">
+                        <button class="btn ghost sm" type="submit">
+                          <?= fc_e($candidate['callsign'] ?? ('Carrier ' . $candidate['id'])) ?>
+                          <span class="dim">· <?= fc_e($candidate['system'] ?? 'position unknown') ?></span>
+                        </button>
+                      </form>
+                    <?php endforeach; ?>
+                  <?php endif; ?>
+                </td>
+              </tr>
+            <?php endif; ?>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  <?php endif; ?>
 
   <div class="card">
     <h2>API key</h2>

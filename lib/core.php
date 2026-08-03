@@ -885,12 +885,17 @@ function fc_owns(?array $user, array $carrier): bool
 /**
  * Whether a viewer may see a given tab.
  *
- * The owner always can. Everyone else is subject to the carrier's own privacy
- * switches, and a fully private carrier is invisible outside the overview.
+ * The owner always can. A squadron carrier's members always can too: it is the
+ * squadron's shared asset, not one member's, so membership is the whole test.
+ * Everyone else is subject to the carrier's own privacy switches, and a fully
+ * private carrier is invisible outside the overview.
  */
 function fc_can_view(?array $user, array $carrier, string $tab): bool
 {
     if (fc_owns($user, $carrier)) {
+        return true;
+    }
+    if (fc_squadron_membership($user, $carrier) !== null) {
         return true;
     }
     if ((int) $carrier['is_public'] !== 1) {
@@ -899,11 +904,200 @@ function fc_can_view(?array $user, array $carrier, string $tab): bool
     return match ($tab) {
         'market', 'shipyard', 'outfitting' => (int) $carrier['show_market'] === 1,
         'itinerary' => (int) $carrier['show_itinerary'] === 1,
-        // Never public. The market is what the owner chose to advertise; the
-        // hold and the bank balance are nobody else's business.
-        'finance', 'cargo' => false,
+        // A personal carrier never shows these: the market is what its owner
+        // chose to advertise, while the hold and the bank balance are nobody
+        // else's business. A squadron's books belong to the squadron
+        // collectively, so its owner is allowed to publish them -- which is the
+        // one place squadron carriers do not follow the personal rules.
+        'finance', 'cargo' => fc_is_squadron_carrier($carrier)
+            && (int) ($carrier['show_finance'] ?? 0) === 1,
         default => true,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Squadron access
+// ---------------------------------------------------------------------------
+//
+// Who may see and manage a squadron carrier. Kept here rather than in
+// squadron.php because it is access control, which belongs beside fc_owns, and
+// because every page asks it while only the sync routes need the Frontier half.
+
+/**
+ * Is this row a squadron carrier?
+ *
+ * The squadron id is the marker. Everything else about the row -- the id, the
+ * jumps, the ledger -- is an ordinary carrier, which is the point: a Javelin is
+ * not a separate kind of thing to track, only a differently owned one.
+ */
+function fc_is_squadron_carrier(array $carrier): bool
+{
+    return ($carrier['squadron_id'] ?? null) !== null;
+}
+
+/**
+ * Is rank $a senior to rank $b?
+ *
+ * Elite numbers squadron ranks from 0 at the top, so smaller is stronger. -1 is
+ * this board's own marker for "in the squadron, rank unknown", and loses to
+ * every real rank.
+ */
+function fc_rank_outranks(int $a, int $b): bool
+{
+    if ($a < 0) {
+        return false;
+    }
+    if ($b < 0) {
+        return true;
+    }
+    return $a < $b;
+}
+
+/**
+ * This account's squadron memberships, as squadron_id => best rank held.
+ *
+ * Cached per request: it is asked once per carrier while rendering a fleet
+ * view, and the answer cannot change inside one page.
+ *
+ * @return array<int,int>
+ */
+function fc_user_squadrons(int $userId): array
+{
+    static $cache = [];
+    if (isset($cache[$userId])) {
+        return $cache[$userId];
+    }
+
+    $out = [];
+    foreach (fc_all(
+        'SELECT squadron_id, rank_id FROM fc_squadron_members WHERE user_id = :u',
+        ['u' => $userId],
+    ) as $row) {
+        $squadron = (int) $row['squadron_id'];
+        $rank = (int) $row['rank_id'];
+        // An account may hold several links into one squadron. The strongest
+        // rank wins, which is the only reading that does not let adding a link
+        // take access away.
+        if (!isset($out[$squadron]) || fc_rank_outranks($rank, $out[$squadron])) {
+            $out[$squadron] = $rank;
+        }
+    }
+
+    return $cache[$userId] = $out;
+}
+
+/**
+ * This viewer's membership of the carrier's squadron, or null.
+ *
+ * Costs nothing for a personal carrier: squadron_id is null on every one of
+ * them, so the lookup is never reached.
+ *
+ * @return array{squadron_id:int,rank_id:int}|null
+ */
+function fc_squadron_membership(?array $user, array $carrier): ?array
+{
+    if ($user === null || !fc_is_squadron_carrier($carrier)) {
+        return null;
+    }
+    $squadron = (int) $carrier['squadron_id'];
+    $held = fc_user_squadrons((int) $user['id']);
+
+    return isset($held[$squadron])
+        ? ['squadron_id' => $squadron, 'rank_id' => $held[$squadron]]
+        : null;
+}
+
+/**
+ * Ranks the owner has delegated management to, as rank ids.
+ *
+ * @return int[]
+ */
+function fc_manage_ranks(array $carrier): array
+{
+    $raw = trim((string) ($carrier['manage_ranks'] ?? ''));
+    if ($raw === '') {
+        return [];
+    }
+
+    $out = [];
+    foreach (explode(',', $raw) as $part) {
+        $part = trim($part);
+        if ($part !== '' && ctype_digit($part)) {
+            $out[] = (int) $part;
+        }
+    }
+    return array_values(array_unique($out));
+}
+
+/**
+ * May this viewer change the carrier's settings?
+ *
+ * The owner always may. Beyond that a squadron carrier's owner can delegate to
+ * ranks -- and granting a rank grants everyone at least that senior, since
+ * "officers may manage this" that excludes the leader is not what anyone means
+ * by it.
+ */
+function fc_can_manage(?array $user, array $carrier): bool
+{
+    if (fc_owns($user, $carrier)) {
+        return true;
+    }
+
+    $membership = fc_squadron_membership($user, $carrier);
+    if ($membership === null) {
+        return false;
+    }
+
+    foreach (fc_manage_ranks($carrier) as $granted) {
+        if ($membership['rank_id'] === $granted || fc_rank_outranks($membership['rank_id'], $granted)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Every squadron carrier this account can see but does not own.
+ *
+ * Owned ones are left out because the dashboard already has those from
+ * owner_user_id; this is the set that membership alone earns.
+ *
+ * @return array<int,array>
+ */
+function fc_squadron_carriers_for_user(int $userId): array
+{
+    $held = fc_user_squadrons($userId);
+    if ($held === []) {
+        return [];
+    }
+
+    // The ids come from our own table and are cast to int, so interpolating
+    // them is safe; PDO cannot bind a list to one placeholder.
+    $ids = implode(',', array_map('intval', array_keys($held)));
+
+    return fc_all(
+        "SELECT * FROM fc_carriers
+          WHERE squadron_id IN ({$ids})
+            AND (owner_user_id IS NULL OR owner_user_id <> :u)
+          ORDER BY updated_at DESC",
+        ['u' => $userId],
+    );
+}
+
+/**
+ * Carriers for the dashboard: the account's own, plus its squadrons'.
+ *
+ * @return array<int,array>
+ */
+function fc_dashboard_carriers(array $user): array
+{
+    return array_merge(
+        fc_all(
+            'SELECT * FROM fc_carriers WHERE owner_user_id = :uid ORDER BY updated_at DESC',
+            ['uid' => $user['id']],
+        ),
+        fc_squadron_carriers_for_user((int) $user['id']),
+    );
 }
 
 // ---------------------------------------------------------------------------

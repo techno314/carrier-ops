@@ -51,10 +51,10 @@ if ($user === null) {
     exit;
 }
 
-$mine = fc_all(
-    'SELECT * FROM fc_carriers WHERE owner_user_id = :uid ORDER BY updated_at DESC',
-    ['uid' => $user['id']],
-);
+// Owned carriers plus any belonging to a squadron this account is in. A
+// squadron carrier is shared, so it appears for every member without anyone
+// having to claim it.
+$mine = fc_dashboard_carriers($user);
 
 fc_head('Dashboard');
 ?>
@@ -149,7 +149,8 @@ fc_head('Dashboard');
       </div>
       <p class="small dim" style="margin-bottom:0">
         Elite allows one fleet carrier per Frontier account, so watching several means connecting several
-        accounts. Each keeps its own Frontier link and updates independently.
+        accounts. Each keeps its own Frontier link and updates independently. A squadron carrier is the
+        exception — it belongs to the squadron, so it shows up for every member without being claimed.
       </p>
     </div>
 

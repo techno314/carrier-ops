@@ -157,6 +157,7 @@ function fc_ingest_capi(array $data, array $user, ?string $ts = null, ?string $c
 
     fc_capi_apply_carrier($carrierId, $carrier, $data, $ts, $callsign);
     fc_capi_apply_services($carrierId, $data, $ts);
+    fc_capi_apply_services_crew($carrierId, $data, $ts);
     fc_capi_apply_cargo($carrierId, $data, $ts);
     fc_capi_apply_market($carrierId, $data, $ts);
     fc_capi_apply_orders($carrierId, $data, $ts);
@@ -258,15 +259,14 @@ function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts,
  * It carries no crew names, so an existing roster from CarrierStats keeps
  * them; this only corrects the installed/running flags.
  */
-function fc_capi_apply_services(int $id, array $data, string $ts): void
+/**
+ * CAPI service keys to the CrewRole names the journal and _costs.php use.
+ *
+ * @return array<string,string>
+ */
+function fc_capi_service_roles(): array
 {
-    $services = $data['market']['services'] ?? null;
-    if (!is_array($services)) {
-        return;
-    }
-
-    // CAPI service keys to the CrewRole names the journal and _costs.php use.
-    static $roles = [
+    return [
         'refuel' => 'Refuel',
         'repair' => 'Repair',
         'rearm' => 'Rearm',
@@ -281,6 +281,16 @@ function fc_capi_apply_services(int $id, array $data, string $ts): void
         'commodities' => 'Commodities',
         'carrierfuel' => 'CarrierFuel',
     ];
+}
+
+function fc_capi_apply_services(int $id, array $data, string $ts): void
+{
+    $services = $data['market']['services'] ?? null;
+    if (!is_array($services)) {
+        return;
+    }
+
+    $roles = fc_capi_service_roles();
 
     foreach ($services as $key => $value) {
         $role = $roles[strtolower((string) $key)] ?? null;
@@ -299,6 +309,55 @@ function fc_capi_apply_services(int $id, array $data, string $ts): void
              ON DUPLICATE KEY UPDATE activated = VALUES(activated), enabled = VALUES(enabled),
                                      updated_at = VALUES(updated_at)',
             ['cid' => $id, 'role' => $role, 'act' => $installed, 'en' => $running, 'ts' => $ts],
+        );
+    }
+}
+
+/**
+ * Crew, from the servicesCrew block.
+ *
+ * The services map above says whether a service runs; this says who runs it,
+ * and it is the only place the Companion API puts a crew member's name. It is
+ * also the only source of either for a squadron carrier, whose payload carries
+ * no market and therefore no market.services at all.
+ */
+function fc_capi_apply_services_crew(int $id, array $data, string $ts): void
+{
+    $crew = $data['servicesCrew'] ?? null;
+    if (!is_array($crew)) {
+        return;
+    }
+
+    $roles = fc_capi_service_roles();
+
+    foreach ($crew as $key => $entry) {
+        $role = $roles[strtolower((string) $key)] ?? null;
+        if ($role === null || !is_array($entry)) {
+            continue;
+        }
+
+        $status = strtolower((string) ($entry['status'] ?? ''));
+        $installed = in_array($status, ['ok', 'suspended'], true) ? 1 : 0;
+        $running = $status === 'ok' ? 1 : 0;
+
+        $member = is_array($entry['crewMember'] ?? null) ? $entry['crewMember'] : [];
+        // A crew slot can exist with nobody in it -- the squadron carrier's
+        // shipyard comes back with an empty name -- so an empty string is not a
+        // name, and must not be written over one CarrierStats supplied.
+        $name = trim((string) ($member['name'] ?? ''));
+        $name = $name === '' ? null : mb_substr($name, 0, 64);
+
+        if (isset($member['enabled']) && strtoupper((string) $member['enabled']) !== 'YES') {
+            $running = 0;
+        }
+
+        fc_exec(
+            'INSERT INTO fc_crew (carrier_id, crew_role, activated, enabled, crew_name, updated_at)
+             VALUES (:cid, :role, :act, :en, :name, :ts)
+             ON DUPLICATE KEY UPDATE activated = VALUES(activated), enabled = VALUES(enabled),
+                                     crew_name = COALESCE(VALUES(crew_name), crew_name),
+                                     updated_at = VALUES(updated_at)',
+            ['cid' => $id, 'role' => $role, 'act' => $installed, 'en' => $running, 'name' => $name, 'ts' => $ts],
         );
     }
 }

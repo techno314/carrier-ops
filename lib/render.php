@@ -9,7 +9,16 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_FUEL_CAPACITY = 1000;   // tonnes of tritium
+// Tonnes of tritium. A Javelin-Class holds the same 1,000 t as a Drake despite
+// being sixty times the hull, so this is not per-hull and does not need to be.
+const FC_FUEL_CAPACITY = 1000;
+
+// Light years. Also the same for both hulls, and also not something the
+// Companion API reports for either -- the recorded figure only ever comes from
+// CarrierStats, which is written when an owner opens the management screen. A
+// squadron carrier may never have had one written, so fall back to the hull's
+// documented maximum rather than showing nothing.
+const FC_JUMP_RANGE_MAX = 500;
 
 function fc_carrier_display_name(array $carrier): string
 {
@@ -44,6 +53,25 @@ function fc_docking_badge(array $carrier): string
         default => 'warn',
     };
     return '<span class="badge ' . $class . '">' . fc_e(fc_docking_label($access)) . '</span>';
+}
+
+/**
+ * Mark a squadron carrier as one.
+ *
+ * Deliberately not the squadron's tag: a Javelin's callsign is its squadron's
+ * tag, so printing the tag beside the callsign renders `PDKD PDKD`. The whole
+ * squadron name is no better -- it is usually what the carrier is named after.
+ * What a reader does not already have from the line is the kind of carrier it
+ * is, so that is what this says, with the squadron named on hover.
+ */
+function fc_squadron_badge(array $carrier): string
+{
+    if (!fc_is_squadron_carrier($carrier)) {
+        return '';
+    }
+    $name = trim((string) ($carrier['squadron_name'] ?? ''));
+
+    return '<span class="badge on" title="' . fc_e($name !== '' ? $name : 'Squadron carrier') . '">Squadron</span>';
 }
 
 function fc_pct(?int $part, ?int $whole): float
@@ -95,6 +123,7 @@ function fc_render_carrier_title(array $carrier, bool $linkCallsign = false): vo
           <?php elseif ($callsign !== ''): ?>
             <span class="callsign"><?= fc_e($callsign) ?></span>
           <?php endif; ?>
+          <?= fc_squadron_badge($carrier) ?>
         </h1>
         <p class="muted small" style="margin:0">
           <?php if ($carrier['system'] !== null): ?>
@@ -152,10 +181,18 @@ function fc_render_carrier_stats(array $carrier, bool $showMoney): void
         <div class="v"><?= fc_num($fuel) ?> <span class="muted small">/ <?= FC_FUEL_CAPACITY ?> t</span></div>
         <div class="bar <?= $fuelPct < 10 ? 'danger' : ($fuelPct < 25 ? 'warn' : '') ?>"><span style="width:<?= round($fuelPct, 1) ?>%"></span></div>
       </div>
+      <?php
+      // The current range falls with load and is only ever measured by
+      // CarrierStats, so it stays blank until one arrives. The maximum is a
+      // property of the hull, so it does not have to wait for anything.
+      $rangeMax = $carrier['jump_range_max'] === null
+          ? FC_JUMP_RANGE_MAX
+          : (float) $carrier['jump_range_max'];
+      ?>
       <div class="stat">
         <div class="k">Jump range</div>
         <div class="v"><?= $carrier['jump_range_curr'] === null ? '—' : number_format((float) $carrier['jump_range_curr'], 1) ?> <span class="muted small">ly</span></div>
-        <div class="muted small" style="margin-top:6px">max <?= $carrier['jump_range_max'] === null ? '—' : number_format((float) $carrier['jump_range_max'], 0) ?> ly</div>
+        <div class="muted small" style="margin-top:6px">max <?= number_format($rangeMax, 0) ?> ly</div>
       </div>
       <div class="stat">
         <div class="k">Cargo space</div>
@@ -593,6 +630,7 @@ function fc_render_carrier_card(array $carrier): void
       <h2 style="margin-bottom:6px">
         <a href="<?= fc_e(fc_carrier_link($carrier)) ?>"><?= fc_e(fc_carrier_display_name($carrier)) ?></a>
         <span class="callsign small"><?= fc_e($carrier['callsign'] ?? '—') ?></span>
+        <?= fc_squadron_badge($carrier) ?>
       </h2>
 
       <p class="muted small" style="margin:0 0 12px">

@@ -40,6 +40,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
 // Pulls in capi.php (the payload parser this ultimately feeds) and webhooks.php
 // alongside it, so a sync announces itself exactly as an upload would.
 require_once __DIR__ . '/ingest.php';
+require_once __DIR__ . '/squadron.php';
 
 const FC_AUTH_BASE = 'https://auth.frontierstore.net';
 const FC_CAPI_BASE = 'https://companion.orerve.net';
@@ -550,12 +551,28 @@ function fc_capi_sync(array $user, int $linkId, bool $force = false): array
         return ['ok' => false, 'note' => null, 'error' => $access['error']];
     }
 
+    // The squadron is asked about first and on its own account. A commander
+    // with no fleet carrier may still be in a squadron that has one, so this
+    // cannot hang off /fleetcarrier having answered -- which is exactly what
+    // happens next for anyone whose only carrier is their squadron's.
+    $squadron = fc_squadron_sync($user, $row, $access['token']);
+    if ($squadron['carrier_id'] !== null) {
+        fc_fill_itinerary_bodies($squadron['carrier_id']);
+        fc_close_itinerary($squadron['carrier_id']);
+        fc_webhook_board_refresh($squadron['carrier_id']);
+    }
+
     $response = fc_capi_get('/fleetcarrier', $access['token']);
 
     // 204 means that account has no carrier -- not an error, just nothing to do.
     if ($response['status'] === 204 || ($response['error'] === null && $response['data'] === null)) {
         fc_exec('UPDATE fc_capi_tokens SET last_fetch_at = UTC_TIMESTAMP(), last_error = NULL WHERE id = :id', ['id' => $linkId]);
-        return ['ok' => false, 'note' => 'Frontier reports no fleet carrier on that account.', 'error' => null];
+        fc_webhook_flush_after_response();
+        return [
+            'ok' => $squadron['carrier_id'] !== null,
+            'note' => $squadron['note'] ?? 'Frontier reports no fleet carrier on that account.',
+            'error' => null,
+        ];
     }
 
     if ($response['error'] !== null) {
@@ -603,7 +620,15 @@ function fc_capi_sync(array $user, int $linkId, bool $force = false): array
         ],
     );
 
-    return ['ok' => (bool) $result['applied'], 'note' => $result['note'], 'error' => null];
+    // Either half succeeding counts: someone whose squadron carrier updated but
+    // whose own did not has still had a useful fetch.
+    $notes = array_values(array_filter([$result['note'], $squadron['note']], static fn($n) => $n !== null));
+
+    return [
+        'ok' => (bool) $result['applied'] || $squadron['carrier_id'] !== null,
+        'note' => $notes === [] ? null : implode(' ', $notes),
+        'error' => null,
+    ];
 }
 
 /**

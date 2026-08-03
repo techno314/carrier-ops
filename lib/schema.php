@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 13;
+const FC_SCHEMA_VERSION = 14;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -107,6 +107,34 @@ function fc_ensure_columns(): void
             // it has been, the orders table is only what the journal saw
             // created and never saw filled.
             'orders_at' => 'DATETIME NULL',
+
+            // A Javelin-Class belongs to a squadron, not a commander, so it is
+            // keyed to the squadron and only tracks who currently leads it.
+            // Non-null squadron_id is what makes a carrier a squadron carrier;
+            // everything else about the row is unchanged.
+            'squadron_id' => 'INT UNSIGNED NULL',
+            'squadron_name' => 'VARCHAR(128) NULL',
+            'squadron_tag' => 'VARCHAR(8) NULL',
+            // Frontier's commander id for the squadron's owner. A different id
+            // space from owner_customer_id -- /squadron reports ownerId, and it
+            // matches /profile's commander.id, not the customer_id from /me.
+            'owner_cmdr_id' => 'INT UNSIGNED NULL',
+            // Squadron ranks allowed to manage this carrier, as a CSV of rank
+            // ids. The owner is always allowed and is never listed here.
+            'manage_ranks' => 'VARCHAR(64) NULL',
+            // A personal carrier never shows its books to the public. A
+            // squadron's are its members' business collectively, so a squadron
+            // carrier may opt in to showing them.
+            'show_finance' => 'TINYINT(1) NOT NULL DEFAULT 0',
+        ],
+
+        // Listed here as well as in the CREATE because the table shipped
+        // mid-version: an install that made it before these two were added has
+        // the table already, and CREATE TABLE IF NOT EXISTS says nothing about
+        // columns. This is the half-applied case fc_ensure_columns exists for.
+        'fc_squadron_members' => [
+            'owner_cmdr_id' => 'INT UNSIGNED NULL',
+            'pending_carrier' => 'VARCHAR(16) NULL',
         ],
     ];
 
@@ -620,6 +648,42 @@ function fc_schema_statements(): array
             created_at DATETIME NOT NULL,
             UNIQUE KEY fc_webhook_queue_dedupe (dedupe_hash),
             KEY fc_webhook_queue_due (next_attempt_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        // Which squadron each Frontier link belongs to, and at what rank.
+        //
+        // Keyed on the link rather than the account: a commander belongs to at
+        // most one squadron, but a board account may hold several links, and
+        // they can be in different squadrons. This is the table that answers
+        // "may this person see that squadron's carrier".
+        //
+        // rank_id is the stable key, not the rank name. A squadron leader can
+        // rename ranks freely -- the Fuel Rats' rank 0 is called `rat` -- so
+        // the name is display only and the number is what access is keyed on.
+        "CREATE TABLE IF NOT EXISTS fc_squadron_members (
+            link_id INT UNSIGNED NOT NULL PRIMARY KEY,
+            user_id INT UNSIGNED NOT NULL,
+            cmdr_id INT UNSIGNED NULL,
+            cmdr_name VARCHAR(64) NULL,
+            squadron_id INT UNSIGNED NOT NULL,
+            squadron_name VARCHAR(128) NULL,
+            squadron_tag VARCHAR(8) NULL,
+            -- Who leads the squadron, in the same commander-id space as
+            -- cmdr_id. Kept per link so that ownership can be settled without
+            -- another call to Frontier.
+            owner_cmdr_id INT UNSIGNED NULL,
+            rank_id INT NOT NULL DEFAULT -1,
+            rank_name VARCHAR(64) NULL,
+            -- The callsign of a squadron carrier Frontier reported but which we
+            -- could not match to a row. `/squadron` gives the carrier no id, so
+            -- until a journal supplies one this is all we know about it, and it
+            -- is what the settings page offers to bind by hand.
+            pending_carrier VARCHAR(16) NULL,
+            joined_at DATETIME NULL,
+            synced_at DATETIME NOT NULL,
+            KEY fc_squadron_members_squadron (squadron_id),
+            KEY fc_squadron_members_user (user_id),
+            KEY fc_squadron_members_cmdr (cmdr_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         "CREATE TABLE IF NOT EXISTS fc_uploads (

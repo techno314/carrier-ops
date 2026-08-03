@@ -19,10 +19,16 @@ if ($carrier === null) {
 }
 
 $owns = fc_owns($user, $carrier);
+// Squadron members are not owners, but the carrier is theirs collectively: they
+// see it in full, and may change its settings if their rank has been granted
+// that. `$owns` stays the narrower test, for the few things -- releasing the
+// carrier, delegating the ranks themselves -- that only the owner should do.
+$membership = fc_squadron_membership($user, $carrier);
+$manages = fc_can_manage($user, $carrier);
 
-// A private carrier is not browsable at all by anyone but its owner; there is
-// no half-visible state to leak a callsign through.
-if (!$owns && (int) $carrier['is_public'] !== 1) {
+// A private carrier is not browsable at all by anyone outside it; there is no
+// half-visible state to leak a callsign through.
+if (!$owns && $membership === null && (int) $carrier['is_public'] !== 1) {
     fc_fail(404, 'No carrier with that id or callsign.');
 }
 
@@ -32,21 +38,50 @@ if (!$owns && (int) $carrier['is_public'] !== 1) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     fc_check_csrf();
-    if (!$owns) {
-        fc_fail(403, 'That carrier is not yours.');
+    if (!$manages) {
+        fc_fail(403, 'That carrier is not yours to change.');
     }
 
     if (($_POST['action'] ?? '') === 'visibility') {
-        fc_update_carrier((int) $carrier['id'], [
+        $fields = [
             'is_public' => isset($_POST['is_public']) ? 1 : 0,
             'show_market' => isset($_POST['show_market']) ? 1 : 0,
             'show_itinerary' => isset($_POST['show_itinerary']) ? 1 : 0,
             'motd' => mb_substr(trim((string) ($_POST['motd'] ?? '')), 0, 500) ?: null,
-        ]);
+        ];
+        // Only a squadron carrier may publish its books, so only a squadron
+        // carrier's form offers the switch -- and only its form is believed.
+        if (fc_is_squadron_carrier($carrier)) {
+            $fields['show_finance'] = isset($_POST['show_finance']) ? 1 : 0;
+        }
+        fc_update_carrier((int) $carrier['id'], $fields);
         fc_flash('Carrier settings saved.');
+    } elseif (($_POST['action'] ?? '') === 'ranks') {
+        // Delegation is the owner's alone. Letting a delegate widen the list
+        // would mean granting management once granted it away for good.
+        if (!$owns || !fc_is_squadron_carrier($carrier)) {
+            fc_fail(403, 'Only the squadron owner can change who may manage this carrier.');
+        }
+        $ranks = [];
+        foreach ((array) ($_POST['rank'] ?? []) as $rank) {
+            if (is_string($rank) && ctype_digit($rank) && (int) $rank <= 99) {
+                $ranks[] = (int) $rank;
+            }
+        }
+        $ranks = array_values(array_unique($ranks));
+        sort($ranks);
+        fc_update_carrier((int) $carrier['id'], [
+            'manage_ranks' => $ranks === [] ? null : implode(',', $ranks),
+        ]);
+        fc_flash($ranks === []
+            ? 'Only you can manage this carrier now.'
+            : 'Management granted to ' . count($ranks) . ' rank' . (count($ranks) === 1 ? '' : 's') . '.');
     } elseif (str_starts_with((string) ($_POST['action'] ?? ''), 'webhook_')) {
         fc_handle_webhook_post((string) $_POST['action'], $carrier);
     } elseif (($_POST['action'] ?? '') === 'release') {
+        if (!$owns) {
+            fc_fail(403, 'Only the owner can release a carrier.');
+        }
         // Hand the carrier back so a different account can claim it. The data
         // stays; only the ownership link is dropped.
         fc_exec('UPDATE fc_carriers SET owner_user_id = NULL WHERE id = :id', ['id' => $carrier['id']]);
@@ -71,12 +106,16 @@ $tabs = [
     'outfitting' => 'Outfitting',
     'crew' => 'Crew',
 ];
-if ($owns) {
+// Driven off fc_can_view rather than ownership, so that a squadron member sees
+// the books their squadron chose to share and the one rule lives in one place.
+if (fc_can_view($user, $carrier, 'finance')) {
     $tabs['finance'] = 'Finance';
-    $tabs['manage'] = 'Manage';
-} else {
-    // Owner-only wherever they sit in the ordering above.
+}
+if (!fc_can_view($user, $carrier, 'cargo')) {
     unset($tabs['cargo']);
+}
+if ($manages) {
+    $tabs['manage'] = 'Manage';
 }
 
 $tab = (string) ($_GET['tab'] ?? 'overview');
@@ -110,14 +149,18 @@ switch ($tab) {
 // ---------------------------------------------------------------------------
 case 'overview':
     $crew = fc_all('SELECT * FROM fc_crew WHERE carrier_id = :id', ['id' => $carrier['id']]);
-    fc_render_carrier_stats($carrier, $owns);
+    // The balance, the upkeep and the tax rates are all the same question as
+    // the finance tab, so they answer to the same rule rather than to ownership
+    // -- which is what lets a squadron see its own carrier's books.
+    $showMoney = fc_can_view($user, $carrier, 'finance');
+    fc_render_carrier_stats($carrier, $showMoney);
     echo '<div style="margin-top:18px"></div>';
-    if ($owns) {
+    if ($showMoney) {
         fc_render_upkeep($carrier, $crew);
     }
     echo '<div class="grid two">';
     fc_render_space_breakdown($carrier);
-    if ($owns) {
+    if ($showMoney) {
         fc_render_taxes($carrier);
     }
     echo '</div>';
@@ -700,18 +743,88 @@ case 'manage':
           <label for="show_itinerary">Show the itinerary publicly.</label>
         </div>
 
+        <?php if (fc_is_squadron_carrier($carrier)): ?>
+          <div class="check">
+            <input type="checkbox" id="show_finance" name="show_finance" <?= (int) ($carrier['show_finance'] ?? 0) === 1 ? 'checked' : '' ?>>
+            <label for="show_finance">Show the balance, upkeep and ledger publicly.</label>
+          </div>
+        <?php endif; ?>
+
         <div class="field" style="margin-top:16px">
           <label for="motd">Message of the day</label>
           <textarea id="motd" name="motd" rows="3" maxlength="500"><?= fc_e($carrier['motd'] ?? '') ?></textarea>
         </div>
 
-        <p class="small dim">Finances are never public, whatever these are set to.</p>
+        <p class="small dim">
+          <?php if (fc_is_squadron_carrier($carrier)): ?>
+            Everyone in <?= fc_e($carrier['squadron_name'] ?? 'the squadron') ?> sees this carrier in full whatever
+            these are set to — they only govern what people outside it can see.
+          <?php else: ?>
+            Finances are never public, whatever these are set to.
+          <?php endif; ?>
+        </p>
 
         <div class="actions">
           <button class="btn" type="submit">Save</button>
         </div>
       </form>
     </div>
+
+    <?php if (fc_is_squadron_carrier($carrier)): ?>
+      <?php
+      // Ranks are offered as the ones actually seen in this squadron rather
+      // than a fixed 0-4: Elite lets a leader rename them, and a list of
+      // numbers nobody recognises would be worse than a short list of the
+      // names they gave them.
+      $ranks = fc_all(
+          'SELECT rank_id, MAX(rank_name) AS rank_name, COUNT(*) AS n
+             FROM fc_squadron_members
+            WHERE squadron_id = :sq AND rank_id >= 0
+            GROUP BY rank_id ORDER BY rank_id ASC',
+          ['sq' => $carrier['squadron_id']],
+      );
+      $granted = fc_manage_ranks($carrier);
+      ?>
+      <div class="card">
+        <h2>Who can manage this</h2>
+        <?php if (!$owns): ?>
+          <p class="muted">
+            <?= fc_e($carrier['squadron_name'] ?? 'The squadron') ?>'s owner decides this. You can manage the
+            carrier because your rank was granted it.
+          </p>
+        <?php else: ?>
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+            <input type="hidden" name="action" value="ranks">
+
+            <?php if ($ranks === []): ?>
+              <div class="empty">
+                No other ranks seen yet. A rank shows up here once someone holding it connects their Frontier
+                account, since that is the only way this board learns the squadron's ranks exist.
+              </div>
+            <?php else: ?>
+              <p class="muted small">
+                Granting a rank also grants everyone above it. You keep management either way.
+              </p>
+              <?php foreach ($ranks as $rank): ?>
+                <?php $rid = (int) $rank['rank_id']; ?>
+                <div class="check">
+                  <input type="checkbox" id="rank<?= $rid ?>" name="rank[]" value="<?= $rid ?>"
+                         <?= in_array($rid, $granted, true) ? 'checked' : '' ?>>
+                  <label for="rank<?= $rid ?>">
+                    <?= fc_e($rank['rank_name'] ?? ('Rank ' . $rid)) ?>
+                    <span class="dim small">· rank <?= $rid ?> · <?= (int) $rank['n'] ?> connected</span>
+                  </label>
+                </div>
+              <?php endforeach; ?>
+              <div class="actions">
+                <button class="btn" type="submit">Save</button>
+              </div>
+            <?php endif; ?>
+          </form>
+        <?php endif; ?>
+      </div>
+    <?php endif; ?>
 
     <div class="card">
       <h2>Identity</h2>
@@ -721,6 +834,29 @@ case 'manage':
           <tr><td>Carrier ID</td><td class="mono"><?= fc_e((string) $carrier['id']) ?></td></tr>
           <tr><td>Callsign</td><td class="mono"><?= fc_e($carrier['callsign'] ?? '—') ?></td></tr>
           <tr><td>Market ID</td><td class="mono"><?= fc_e((string) ($carrier['market_id'] ?? '—')) ?></td></tr>
+          <?php if (fc_is_squadron_carrier($carrier)): ?>
+            <tr>
+              <td>Squadron</td>
+              <td>
+                <?= fc_e($carrier['squadron_name'] ?? '—') ?>
+                <span class="mono dim small">
+                  <?= fc_e($carrier['squadron_tag'] ?? '') ?> · <?= fc_e((string) $carrier['squadron_id']) ?>
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td>Owner</td>
+              <td class="mono">
+                <?php
+                $ownerCmdr = $carrier['owner_cmdr_id'] === null ? null : fc_one(
+                    'SELECT cmdr_name FROM fc_squadron_members WHERE cmdr_id = :c LIMIT 1',
+                    ['c' => $carrier['owner_cmdr_id']],
+                );
+                ?>
+                <?= fc_e($ownerCmdr['cmdr_name'] ?? ($carrier['owner_cmdr_id'] === null ? '—' : 'commander ' . $carrier['owner_cmdr_id'])) ?>
+              </td>
+            </tr>
+          <?php endif; ?>
           <tr><td>Claimed</td><td><?= fc_e(fc_dt($carrier['created_at'])) ?></td></tr>
           </tbody>
         </table>
@@ -833,21 +969,29 @@ case 'manage':
       </p>
     </div>
 
-    <div class="card">
-      <h2>Release</h2>
-      <p class="muted small">
-        Releasing unlinks the carrier from your account without deleting anything. Another account can then claim it
-        by uploading a journal containing its owner-only events. Use this if the carrier changed hands, or if you
-        claimed it from the wrong account.
-      </p>
-      <form method="post" onsubmit="return confirm('Release this carrier? Any account will then be able to claim it.')">
-        <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
-        <input type="hidden" name="action" value="release">
-        <div class="actions">
-          <button class="btn danger" type="submit">Release carrier</button>
-        </div>
-      </form>
-    </div>
+    <?php
+    // Not offered for a squadron carrier: ownership there is read from
+    // Frontier's ownerId on every sync, so releasing it would last until the
+    // next fetch and confuse everyone in the meantime. It is also not this
+    // account's to give away.
+    ?>
+    <?php if ($owns && !fc_is_squadron_carrier($carrier)): ?>
+      <div class="card">
+        <h2>Release</h2>
+        <p class="muted small">
+          Releasing unlinks the carrier from your account without deleting anything. Another account can then claim it
+          by uploading a journal containing its owner-only events. Use this if the carrier changed hands, or if you
+          claimed it from the wrong account.
+        </p>
+        <form method="post" onsubmit="return confirm('Release this carrier? Any account will then be able to claim it.')">
+          <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+          <input type="hidden" name="action" value="release">
+          <div class="actions">
+            <button class="btn danger" type="submit">Release carrier</button>
+          </div>
+        </form>
+      </div>
+    <?php endif; ?>
     <?php
     break;
 }
