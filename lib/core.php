@@ -947,6 +947,140 @@ function fc_can_view(?array $user, array $carrier, string $tab): bool
 }
 
 // ---------------------------------------------------------------------------
+// Deleting an account
+// ---------------------------------------------------------------------------
+
+/** How long a scheduled deletion waits before the sweep carries it out. */
+const FC_DELETE_GRACE_DAYS = 14;
+
+/**
+ * Schedule an account for deletion.
+ *
+ * `$suspend` is the difference between the two ways this is reached, and it
+ * matters more than it looks.
+ *
+ * An admin removing somebody wants them gone now, with the wait existing only
+ * so a mistake can be undone. Suspension does almost all of that already:
+ * is_banned is checked on sign-in, on every API key call, and by the cron
+ * before it fetches Frontier. Webhooks are the exception -- they are keyed to
+ * a carrier rather than a person, and fc_webhook_flush never looks at who
+ * created one, so a squadron carrier updated by another member would keep
+ * posting to a channel belonging to an account on its way out.
+ *
+ * Somebody deleting their own account is the opposite case: the grace period
+ * is theirs to change their mind in, and suspending them would lock them out
+ * of the very screen holding the cancel button. So a self-service deletion
+ * leaves the account working until the date arrives.
+ */
+function fc_schedule_user_deletion(int $userId, bool $suspend, int $days = FC_DELETE_GRACE_DAYS): void
+{
+    fc_exec(
+        'UPDATE fc_users
+            SET delete_after = DATE_ADD(UTC_TIMESTAMP(), INTERVAL :days DAY)'
+        . ($suspend ? ', is_banned = 1' : '') .
+        ' WHERE id = :id',
+        ['days' => $days, 'id' => $userId],
+    );
+    if ($suspend) {
+        fc_exec('UPDATE fc_webhooks SET enabled = 0 WHERE created_by = :id', ['id' => $userId]);
+    }
+}
+
+/** Call off a scheduled deletion and put the account back into service. */
+function fc_cancel_user_deletion(int $userId): void
+{
+    fc_exec(
+        'UPDATE fc_users SET is_banned = 0, delete_after = NULL WHERE id = :id',
+        ['id' => $userId],
+    );
+    fc_exec('UPDATE fc_webhooks SET enabled = 1 WHERE created_by = :id', ['id' => $userId]);
+}
+
+/**
+ * Erase an account and everything that identifies its owner.
+ *
+ * Shared by the admin panel and the cron sweep so the two cannot drift: an
+ * earlier version of this lived only in lib/admin.php and missed three tables,
+ * one of which -- fc_squadron_members -- grants access to squadron carriers
+ * and so outlived the account it belonged to.
+ *
+ * Carriers are released rather than removed. A carrier's history is the
+ * carrier's, not the claimant's, and another account can pick it up by
+ * uploading. What does go is owner_customer_id, which is the Frontier account
+ * number that claimed it and identifies a person.
+ *
+ * @return int carriers released
+ */
+function fc_purge_user(int $userId): int
+{
+    // Read before anything is deleted: the commander id is only recorded on
+    // the squadron row, and it has to be matched against carriers afterwards.
+    $member = fc_one('SELECT cmdr_id FROM fc_squadron_members WHERE user_id = :id LIMIT 1', ['id' => $userId]);
+    $cmdrId = $member === null ? null : $member['cmdr_id'];
+
+    // Before fc_capi_tokens goes: the join is what identifies which carriers
+    // this account claimed.
+    fc_exec(
+        'UPDATE fc_carriers c
+           JOIN fc_capi_tokens t ON t.customer_id = c.owner_customer_id
+            SET c.owner_customer_id = NULL
+          WHERE t.user_id = :id',
+        ['id' => $userId],
+    );
+    if ($cmdrId !== null) {
+        fc_exec(
+            'UPDATE fc_carriers SET owner_cmdr_id = NULL WHERE owner_cmdr_id = :c',
+            ['c' => $cmdrId],
+        );
+    }
+
+    $released = fc_exec(
+        'UPDATE fc_carriers SET owner_user_id = NULL WHERE owner_user_id = :id',
+        ['id' => $userId],
+    );
+
+    // Queue and message rows are keyed to the webhook, not the user, so they
+    // have to go first or they are orphaned by the delete below.
+    fc_exec(
+        'DELETE q FROM fc_webhook_queue q
+           JOIN fc_webhooks w ON w.id = q.webhook_id
+          WHERE w.created_by = :id',
+        ['id' => $userId],
+    );
+    fc_exec(
+        'DELETE m FROM fc_webhook_messages m
+           JOIN fc_webhooks w ON w.id = m.webhook_id
+          WHERE w.created_by = :id',
+        ['id' => $userId],
+    );
+    fc_exec('DELETE FROM fc_webhooks WHERE created_by = :id', ['id' => $userId]);
+
+    foreach (['fc_squadron_members', 'fc_uploads', 'fc_sessions', 'fc_password_resets',
+              'fc_capi_tokens', 'fc_capi_pending'] as $table) {
+        fc_exec("DELETE FROM {$table} WHERE user_id = :id", ['id' => $userId]);
+    }
+    fc_exec('DELETE FROM fc_users WHERE id = :id', ['id' => $userId]);
+
+    return $released;
+}
+
+/**
+ * Carry out deletions whose grace period has run out.
+ *
+ * @return int accounts erased
+ */
+function fc_sweep_scheduled_deletions(): int
+{
+    $due = fc_all(
+        'SELECT id FROM fc_users WHERE delete_after IS NOT NULL AND delete_after <= UTC_TIMESTAMP()'
+    );
+    foreach ($due as $row) {
+        fc_purge_user((int) $row['id']);
+    }
+    return count($due);
+}
+
+// ---------------------------------------------------------------------------
 // Squadron access
 // ---------------------------------------------------------------------------
 //
@@ -1287,7 +1421,7 @@ function fc_foot(): void
 {
     ?>
 <footer class="foot">
-  <span>Carrier Ops</span>
+  <span>Carrier Ops · <a href="<?= fc_e(fc_url('privacy.php')) ?>">Privacy</a></span>
   <span class="muted">Data comes from your own Elite Dangerous journals. Not affiliated with Frontier Developments.</span>
 </footer>
 </body>

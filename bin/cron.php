@@ -181,6 +181,14 @@ try {
     fc_exec('DELETE FROM fc_capi_pending WHERE created_at < (UTC_TIMESTAMP() - INTERVAL 1 HOUR)');
     fc_exec('DELETE FROM fc_password_resets WHERE expires_at < (UTC_TIMESTAMP() - INTERVAL 7 DAY)');
     fc_exec('DELETE FROM fc_buyers WHERE fetched_at < (UTC_TIMESTAMP() - INTERVAL 7 DAY)');
+
+    // Accounts whose grace period has run out. Suspended since the moment
+    // deletion was asked for, so this only decides when the rows go.
+    $counts['deleted'] = fc_sweep_scheduled_deletions();
+    if ($counts['deleted'] > 0) {
+        $log('erased ' . $counts['deleted'] . ' account(s) past their grace period');
+    }
+
     $log('housekeeping done');
 } catch (Throwable $e) {
     $counts['errors']++;

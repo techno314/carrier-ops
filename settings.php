@@ -31,6 +31,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             fc_flash('Profile saved.');
             fc_redirect(fc_url('settings.php'));
         }
+    } elseif ($action === 'delete_account') {
+        // Self-service, so asking to be erased does not depend on an admin
+        // noticing a message somewhere. The password is required because this
+        // ends the account, and a borrowed session should not be able to.
+        if (!password_verify((string) ($_POST['current'] ?? ''), (string) $user['password_hash'])) {
+            $error = 'That is not your password.';
+        } else {
+            // Not suspended: the wait is yours to change your mind in, and
+            // locking the account would take away the cancel button with it.
+            fc_schedule_user_deletion((int) $user['id'], false);
+            fc_flash(
+                'Your account will be deleted in ' . FC_DELETE_GRACE_DAYS
+                . ' days. You can change your mind here until then.'
+            );
+            fc_redirect(fc_url('settings.php'));
+        }
+    } elseif ($action === 'delete_account_cancel') {
+        fc_cancel_user_deletion((int) $user['id']);
+        fc_flash('Your account will not be deleted.');
+        fc_redirect(fc_url('settings.php'));
     } elseif ($action === 'password') {
         $current = (string) ($_POST['current'] ?? '');
         $new = (string) ($_POST['new'] ?? '');
@@ -401,6 +421,48 @@ fc_head('Settings', 'settings');
 
       <div class="actions"><button class="btn" type="submit">Change password</button></div>
     </form>
+  </div>
+
+  <div class="card">
+    <h2>Delete your account</h2>
+
+    <?php if ($user['delete_after'] !== null): ?>
+      <div class="banner warn">
+        Your account is scheduled for deletion on
+        <strong><?= fc_e(fc_dt($user['delete_after'])) ?> UTC</strong>.
+        Nothing has been removed yet and the board works as usual until then.
+      </div>
+      <form method="post">
+        <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+        <input type="hidden" name="action" value="delete_account_cancel">
+        <div class="actions"><button class="btn" type="submit">Keep my account</button></div>
+      </form>
+    <?php else: ?>
+      <p class="muted small">
+        Deletion is scheduled <?= FC_DELETE_GRACE_DAYS ?> days ahead so it can be undone — sign in before
+        then and press the button that appears here. After that it is permanent.
+      </p>
+      <p class="muted small">
+        Erased: your sign-in details and email, your Frontier authorisations, your upload history, your
+        webhooks, and your squadron membership. Your carriers are <em>released</em> rather than deleted —
+        their journal history belongs to the carrier, and any account can claim one again by uploading.
+        Nothing identifying you is left on them.
+      </p>
+      <form method="post">
+        <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+        <input type="hidden" name="action" value="delete_account">
+        <div class="field">
+          <label for="delcurrent">Confirm with your password</label>
+          <input id="delcurrent" name="current" type="password" required autocomplete="current-password">
+        </div>
+        <div class="actions">
+          <button class="btn danger" type="submit"
+                  onclick="return confirm('Schedule your account for deletion in <?= FC_DELETE_GRACE_DAYS ?> days?')">
+            Delete my account
+          </button>
+        </div>
+      </form>
+    <?php endif; ?>
   </div>
 </main>
 <?php fc_foot();

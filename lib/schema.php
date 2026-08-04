@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 15;
+const FC_SCHEMA_VERSION = 16;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -143,6 +143,10 @@ function fc_ensure_columns(): void
             // stays signed in, and from the upload log, which the plugin writes
             // while nobody is at the keyboard.
             'last_active' => 'DATETIME NULL',
+            // Set when deletion is scheduled. The account is suspended at the
+            // same time, so the wait is a chance to undo rather than a period
+            // of continued use. The cron erases it once this passes.
+            'delete_after' => 'DATETIME NULL',
         ],
     ];
 
@@ -230,6 +234,11 @@ function fc_drop_columns(): void
         // stopped listing individual events. board_message_id and board_hash
         // moved to fc_webhook_messages when one board became several.
         'fc_webhooks' => ['events', 'board_message_id', 'board_hash'],
+        // The IP a reset was requested from. Written since the table existed
+        // and never read by anything: rate limiting counts rows per account,
+        // not per address. Dropping the column removes the addresses already
+        // collected along with it.
+        'fc_password_resets' => ['requested_ip'],
     ];
 
     $db = fc_db();
@@ -332,6 +341,7 @@ function fc_schema_statements(): array
             created_at DATETIME NOT NULL,
             last_login DATETIME NULL,
             last_active DATETIME NULL,
+            delete_after DATETIME NULL,
             UNIQUE KEY fc_users_username (username),
             UNIQUE KEY fc_users_email (email),
             UNIQUE KEY fc_users_api_key (api_key_hash)

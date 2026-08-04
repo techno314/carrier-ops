@@ -138,16 +138,28 @@ function fc_handle_admin_post(string $action, array $admin): void
                 fc_flash('You cannot delete your own account here.', 'err');
                 return;
             }
-            // Carriers are released rather than removed: the journal history
-            // belongs to the carrier, not to whoever happened to claim it, and
-            // another account can pick it up again by uploading.
-            $released = fc_exec('UPDATE fc_carriers SET owner_user_id = NULL WHERE owner_user_id = :id', ['id' => $targetId]);
-            fc_exec('DELETE FROM fc_sessions WHERE user_id = :id', ['id' => $targetId]);
-            fc_exec('DELETE FROM fc_password_resets WHERE user_id = :id', ['id' => $targetId]);
-            fc_exec('DELETE FROM fc_capi_tokens WHERE user_id = :id', ['id' => $targetId]);
-            fc_exec('DELETE FROM fc_capi_pending WHERE user_id = :id', ['id' => $targetId]);
-            fc_exec('DELETE FROM fc_users WHERE id = :id', ['id' => $targetId]);
-            fc_flash($target['username'] . ' was deleted. '
+            // Scheduled rather than immediate. The account is suspended now, so
+            // it cannot be used in the meantime; the wait exists so a mistake
+            // can be undone, not so anyone keeps access.
+            fc_schedule_user_deletion($targetId, true);
+            fc_flash(
+                $target['username'] . ' is suspended and will be erased in '
+                . FC_DELETE_GRACE_DAYS . ' days. Cancel any time before then.'
+            );
+            return;
+
+        case 'admin_delete_cancel':
+            fc_cancel_user_deletion($targetId);
+            fc_flash($target['username'] . ' will not be deleted, and can sign in again.');
+            return;
+
+        case 'admin_delete_now':
+            if ($isSelf) {
+                fc_flash('You cannot delete your own account here.', 'err');
+                return;
+            }
+            $released = fc_purge_user($targetId);
+            fc_flash($target['username'] . ' was erased. '
                 . ($released === 0 ? 'No carriers were attached.'
                     : $released . ' carrier' . ($released === 1 ? '' : 's') . ' released, with all data intact.'));
             return;
@@ -352,7 +364,16 @@ function fc_render_admin(array $admin): void
                   <?= $seen !== '' ? fc_e(fc_ago($seen)) : '—' ?>
                 </td>
                 <td>
-                  <?php if ((int) $u['is_banned'] === 1): ?><span class="badge bad">Suspended</span><?php endif; ?>
+                  <?php if ($u['delete_after'] !== null): ?>
+                    <?php
+                    // Distinct from an ordinary suspension: both set is_banned,
+                    // but only one of them ends with the account gone.
+                    $left = max(0, (int) ceil(((int) strtotime((string) $u['delete_after'] . ' UTC') - time()) / 86400));
+                    ?>
+                    <span class="badge bad" title="Erased on <?= fc_e(fc_dt($u['delete_after'])) ?>">
+                      Deleting in <?= $left ?>d
+                    </span>
+                  <?php elseif ((int) $u['is_banned'] === 1): ?><span class="badge bad">Suspended</span><?php endif; ?>
                   <?php if ((int) $u['is_admin'] === 1): ?><span class="badge accent">Admin</span><?php endif; ?>
                   <?php if ((int) $u['is_banned'] !== 1 && (int) $u['is_admin'] !== 1): ?><span class="badge">User</span><?php endif; ?>
                 </td>
@@ -381,8 +402,14 @@ function fc_render_admin(array $admin): void
                                 onclick="return confirm('Disconnect every Frontier account from <?= fc_e($u['username']) ?>? They will have to authorise again to upload.')">Disconnect Frontier</button>
                       <?php endif; ?>
 
-                      <button class="btn danger ghost sm" name="action" value="admin_delete"
-                              onclick="return confirm('Delete <?= fc_e($u['username']) ?>? Their carriers are released, not deleted.')">Delete</button>
+                      <?php if ($u['delete_after'] !== null): ?>
+                        <button class="btn ghost sm" name="action" value="admin_delete_cancel">Keep account</button>
+                        <button class="btn danger ghost sm" name="action" value="admin_delete_now"
+                                onclick="return confirm('Erase <?= fc_e($u['username']) ?> now, without waiting? This cannot be undone.')">Erase now</button>
+                      <?php else: ?>
+                        <button class="btn danger ghost sm" name="action" value="admin_delete"
+                                onclick="return confirm('Delete <?= fc_e($u['username']) ?>? They are suspended now and erased in <?= FC_DELETE_GRACE_DAYS ?> days. Their carriers are released, not deleted.')">Delete</button>
+                      <?php endif; ?>
                     </form>
                   <?php else: ?>
                     <span class="dim small">Use another admin</span>

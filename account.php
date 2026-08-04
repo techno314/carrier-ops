@@ -303,14 +303,18 @@ function fc_page_forgot(): void
 
                 if ($recent < FC_RESET_MAX_PER_HOUR) {
                     $token = fc_token();
+                    // The requester's IP was stored here and never read by
+                    // anything -- rate limiting counts rows per account, not
+                    // per address. Keeping an address on the chance it might
+                    // one day be useful is the sort of collection that is
+                    // hard to justify, so it is no longer written.
                     fc_exec(
-                        'INSERT INTO fc_password_resets (user_id, token_hash, expires_at, requested_ip, created_at)
-                         VALUES (:uid, :hash, :exp, :ip, UTC_TIMESTAMP())',
+                        'INSERT INTO fc_password_resets (user_id, token_hash, expires_at, created_at)
+                         VALUES (:uid, :hash, :exp, UTC_TIMESTAMP())',
                         [
                             'uid' => $user['id'],
                             'hash' => hash('sha256', $token),
                             'exp' => gmdate('Y-m-d H:i:s', time() + FC_RESET_TTL_SECONDS),
-                            'ip' => @inet_pton($_SERVER['REMOTE_ADDR'] ?? '') ?: null,
                         ],
                     );
 
