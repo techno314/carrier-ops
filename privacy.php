@@ -76,10 +76,16 @@ fc_head('Privacy');
   <div class="card">
     <h2>Who else sees it</h2>
     <p class="muted small">
-      Nobody, unless you publish it. A carrier is private by default; making it public shows its overview,
-      and separate switches control the market and itinerary. Finances and cargo are never public for a
-      personal carrier. A squadron carrier is visible to that squadron, and its owner can publish its books
-      if they choose.
+      <strong>A carrier is public from the moment it is claimed.</strong> Its overview, crew, jump history,
+      market and itinerary are visible to anyone with the link, and it is listed on the
+      <a href="<?= fc_e(fc_url('search.php')) ?>">Carriers</a> page where anyone can find it. That is the
+      default rather than something you switch on, and this site is indexed by search engines.
+    </p>
+    <p class="muted small">
+      Three switches on the carrier's Manage tab change it: one takes it out of the listing entirely, and
+      two others control the market and the itinerary separately. Finances and cargo are
+      <em>never</em> public for a personal carrier whatever those are set to. A squadron carrier is always
+      visible to its squadron, and its owner may additionally choose to publish its books.
     </p>
     <p class="muted small">
       If you point a Discord webhook at a carrier, the board sends that carrier's details to Discord. That
