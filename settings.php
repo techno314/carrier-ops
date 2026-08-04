@@ -445,7 +445,8 @@ fc_head('Settings', 'settings');
       <p class="muted small">
         Erased: your sign-in details and email, your Frontier authorisations, your upload history, your
         webhooks, and your squadron membership. Your carriers are <em>released</em> rather than deleted —
-        their journal history belongs to the carrier, and any account can claim one again by uploading.
+        their journal history belongs to the carrier, and it can be claimed again by connecting the Frontier
+        account that owns it.
         Nothing identifying you is left on them.
       </p>
       <form method="post">

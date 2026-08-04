@@ -85,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Hand the carrier back so a different account can claim it. The data
         // stays; only the ownership link is dropped.
         fc_exec('UPDATE fc_carriers SET owner_user_id = NULL WHERE id = :id', ['id' => $carrier['id']]);
-        fc_flash('Carrier released. Any account can now claim it by uploading its journal.');
+        fc_flash('Carrier released. Another account can claim it by connecting the Frontier account that owns it.');
         fc_redirect(fc_url());
     }
 
@@ -980,7 +980,7 @@ case 'manage':
         <h2>Release</h2>
         <p class="muted small">
           Releasing unlinks the carrier from your account without deleting anything. Another account can then claim it
-          by uploading a journal containing its owner-only events. Use this if the carrier changed hands, or if you
+          by connecting the Frontier account that owns it. Use this if the carrier changed hands, or if you
           claimed it from the wrong account.
         </p>
         <form method="post" onsubmit="return confirm('Release this carrier? Any account will then be able to claim it.')">

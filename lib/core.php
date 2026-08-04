@@ -1005,8 +1005,9 @@ function fc_cancel_user_deletion(int $userId): void
  * and so outlived the account it belonged to.
  *
  * Carriers are released rather than removed. A carrier's history is the
- * carrier's, not the claimant's, and another account can pick it up by
- * uploading. What does go is owner_customer_id, which is the Frontier account
+ * carrier's, not the claimant's, and it can be claimed again by connecting
+ * the Frontier account that owns it -- which is the only thing that can claim
+ * a carrier at all. What does go is owner_customer_id, which is the Frontier account
  * number that claimed it and identifies a person.
  *
  * @return int carriers released

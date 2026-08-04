@@ -423,7 +423,7 @@ function fc_render_admin(array $admin): void
         <p class="small dim" style="margin-bottom:0">
           Suspending ends every session and blocks the account's API key, since that is checked against the same
           flag on each call. Deleting releases any carrier it owned rather than removing it — the history belongs
-          to the carrier, and another account can claim it again by uploading.
+          to the carrier, and another account can claim it again by connecting Frontier.
         </p>
       </div>
 

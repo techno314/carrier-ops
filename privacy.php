@@ -117,7 +117,8 @@ fc_head('Privacy');
     <p class="muted small">
       When it happens, everything above goes: sign-in details, email, Frontier authorisations and customer
       id, upload history, webhooks and squadron membership. Your carriers are released rather than deleted
-      — their history belongs to the carrier and any account can claim one again — and nothing identifying
+      — their history belongs to the carrier, and one can be claimed again by connecting the Frontier
+      account that owns it — and nothing identifying
       you is left on them.
     </p>
     <p class="muted small">
