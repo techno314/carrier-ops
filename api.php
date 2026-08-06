@@ -17,6 +17,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib/core.php';
 require_once __DIR__ . '/lib/ingest.php';
 require_once __DIR__ . '/lib/render.php';
+require_once __DIR__ . '/lib/colony.php';
 
 header('Cache-Control: no-store');
 
@@ -308,6 +309,65 @@ case 'carrier':
 
     fc_json(200, $out);
 
+/*
+ * A colonisation build several people are hauling to.
+ *
+ * Both routes want a key. Reading is not public the way a carrier's advertised
+ * market is: a build's shopping list, who is carrying what and where they are
+ * up to is the group's business, and the group is whoever has an account here.
+ */
+case 'colony_report':
+    $user = fc_api_require_user();
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        fc_json(405, ['error' => 'POST a report to this one.']);
+    }
+
+    $body = file_get_contents('php://input');
+    $data = json_decode((string) $body, true);
+    if (!is_array($data)) {
+        fc_json(400, ['error' => 'Send a JSON object describing what you can see.']);
+    }
+
+    $result = fc_colony_apply_report($user, $data);
+    if (!$result['ok']) {
+        fc_json(400, ['error' => $result['note'] ?? 'The report could not be applied.']);
+    }
+
+    // The merged view comes straight back, so a planner that reports does not
+    // then have to ask -- one call per refresh rather than two.
+    $site = fc_colony_site((int) $result['market_id']);
+    fc_json(200, [
+        'applied' => ['needs' => $result['needs'], 'stock' => $result['stock']],
+        'note' => $result['note'],
+    ] + ($site === null ? [] : fc_colony_view($site)));
+
+case 'colony':
+    fc_api_require_user();
+    $query = trim((string) ($_GET['site'] ?? $_GET['id'] ?? ''));
+    if ($query === '') {
+        fc_json(400, ['error' => 'Pass site= with a construction site name, or id= with its MarketID.']);
+    }
+
+    $matches = fc_colony_search($query);
+    if ($matches === []) {
+        fc_json(404, ['error' => 'No build by that name yet. It appears once somebody docked there reports it.']);
+    }
+    // Several sites can share a name across systems, and a caller that asked by
+    // name deserves to be told rather than silently given the first one.
+    if (count($matches) > 1) {
+        fc_json(300, [
+            'error' => 'More than one build matches that name.',
+            'sites' => array_map(static fn(array $s) => [
+                'marketId' => (string) $s['market_id'],
+                'name' => $s['name'],
+                'system' => $s['system'],
+                'readAt' => $s['read_at'],
+            ], $matches),
+        ]);
+    }
+
+    fc_json(200, fc_colony_view($matches[0]));
+
 case 'carriers':
     $query = trim((string) ($_GET['q'] ?? ''));
     if ($query !== '') {
@@ -337,6 +397,6 @@ case 'carriers':
 default:
     fc_json(400, [
         'error' => 'Unknown action.',
-        'actions' => ['ingest', 'carrier', 'carriers', 'me'],
+        'actions' => ['ingest', 'carrier', 'carriers', 'colony', 'colony_report', 'me'],
     ]);
 }

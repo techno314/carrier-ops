@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 17;
+const FC_SCHEMA_VERSION = 18;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -721,6 +721,76 @@ function fc_schema_statements(): array
             carriers_touched VARCHAR(190) NULL,
             ts DATETIME NOT NULL,
             KEY fc_uploads_user (user_id, ts)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        /*
+         * Colonisation builds that several people are hauling to at once.
+         *
+         * Nothing here can be worked out from one machine. A commander's
+         * journal knows what they saw when they last docked and what is in
+         * their own hold, and that is all -- so two haulers both buy fifty
+         * thousand tonnes of steel for a site that wanted seventy, and neither
+         * finds out until one of them arrives. These tables are where the
+         * separate views are added up.
+         *
+         * Keyed on the site's MarketID, which the game gives every construction
+         * depot and which is the same number for everyone who docks there.
+         */
+        "CREATE TABLE IF NOT EXISTS fc_colony_sites (
+            market_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+            name VARCHAR(128) NOT NULL,
+            system VARCHAR(128) NULL,
+            progress DOUBLE NOT NULL DEFAULT 0,
+            complete TINYINT(1) NOT NULL DEFAULT 0,
+            failed TINYINT(1) NOT NULL DEFAULT 0,
+            -- When the manifest below was read from the game, not when a row
+            -- was written: readings arrive out of order from several people and
+            -- an older one must never overwrite a newer.
+            read_at DATETIME NOT NULL,
+            read_by INT UNSIGNED NULL,
+            created_at DATETIME NOT NULL,
+            KEY fc_colony_sites_name (name),
+            KEY fc_colony_sites_system (system)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        "CREATE TABLE IF NOT EXISTS fc_colony_needs (
+            market_id BIGINT UNSIGNED NOT NULL,
+            commodity VARCHAR(64) NOT NULL,
+            loc_name VARCHAR(96) NULL,
+            required INT NOT NULL DEFAULT 0,
+            provided INT NOT NULL DEFAULT 0,
+            payment INT NOT NULL DEFAULT 0,
+            PRIMARY KEY (market_id, commodity)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        /* One row per person per build: who they are and what they haul in. */
+        "CREATE TABLE IF NOT EXISTS fc_colony_haulers (
+            market_id BIGINT UNSIGNED NOT NULL,
+            user_id INT UNSIGNED NOT NULL,
+            cmdr VARCHAR(64) NULL,
+            carrier VARCHAR(16) NULL,
+            ship VARCHAR(64) NULL,
+            cargo_capacity INT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (market_id, user_id),
+            KEY fc_colony_haulers_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        /*
+         * What each person has, per commodity.
+         *
+         * Three separate columns rather than three tables, because they are
+         * always read together and always written together: the planner sends
+         * its whole position at once and this replaces it.
+         */
+        "CREATE TABLE IF NOT EXISTS fc_colony_stock (
+            market_id BIGINT UNSIGNED NOT NULL,
+            user_id INT UNSIGNED NOT NULL,
+            commodity VARCHAR(64) NOT NULL,
+            in_ship INT NOT NULL DEFAULT 0,
+            on_carrier INT NOT NULL DEFAULT 0,
+            delivered INT NOT NULL DEFAULT 0,
+            PRIMARY KEY (market_id, user_id, commodity)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
     ];
 }
