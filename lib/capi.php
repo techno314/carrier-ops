@@ -18,7 +18,11 @@ declare(strict_types=1);
  * What this adds over the journal:
  *
  *   finance.coreCost / servicesCost   the real upkeep, not our reconstruction
- *   cargo                             the hold, which the journal never reports
+ *   cargo                             what is in the hold. CarrierStats gives
+ *                                     the tonnage but never the manifest
+ *   capacity                          the same tonnage, on every sync rather
+ *                                     than only when someone opens the
+ *                                     management screen
  *   market / ships / modules          without opening those screens in game
  *   itinerary.completed               arrivals with real visit durations
  */
@@ -158,7 +162,7 @@ function fc_ingest_capi(array $data, array $user, ?string $ts = null, ?string $c
     fc_capi_apply_carrier($carrierId, $carrier, $data, $ts, $callsign);
     fc_capi_apply_services($carrierId, $data, $ts);
     fc_capi_apply_services_crew($carrierId, $data, $ts);
-    fc_capi_apply_cargo($carrierId, $data, $ts);
+    fc_capi_apply_cargo($carrierId, $carrier, $data, $ts);
     fc_capi_apply_market($carrierId, $data, $ts);
     fc_capi_apply_orders($carrierId, $data, $ts);
     fc_capi_apply_shipyard($carrierId, $data, $ts);
@@ -204,13 +208,13 @@ const FC_JOURNAL_GRACE = 1800;
  * all stamped by CAPI too, so using them would have CAPI reporting its own
  * freshness back to itself and the guard would never fire.
  */
-function fc_journal_fresh(array $carrier, string $ts): bool
+function fc_journal_fresh(array $carrier, string $ts, array $columns = ['stats_at', 'fuel_at']): bool
 {
     $now = strtotime($ts);
     if ($now === false) {
         return false;
     }
-    foreach (['stats_at', 'fuel_at'] as $column) {
+    foreach ($columns as $column) {
         $seen = $carrier[$column] ?? null;
         if ($seen === null) {
             continue;
@@ -221,6 +225,23 @@ function fc_journal_fresh(array $carrier, string $ts): bool
         }
     }
     return false;
+}
+
+/**
+ * The same question, asked about the hold.
+ *
+ * Kept separate rather than folded into the default markers, because the two
+ * answer different questions and merging them would be too blunt in both
+ * directions: shifting one crate would freeze the carrier's position, name and
+ * balance for half an hour, and opening the management screen would freeze the
+ * manifest for half an hour after that.
+ *
+ * cargo_at is not a marker here for the usual reason -- CAPI stamps it itself,
+ * so it would only ever report its own freshness back to itself.
+ */
+function fc_cargo_journal_fresh(array $carrier, string $ts): bool
+{
+    return fc_journal_fresh($carrier, $ts, ['cargo_journal_at']);
 }
 
 function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts, ?string $callsign): void
@@ -331,6 +352,56 @@ function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts,
             }
         }
         $fields['finance_at'] = $ts;
+    }
+
+    // Hold and crew space.
+    //
+    // CarrierStats carries the same block, but the game only writes that event
+    // when the owner opens the management screen -- moving cargo does not
+    // produce one. So this was the one part of SpaceUsage with no second
+    // source: transfer 1216 t of tritium off the carrier and the figure sat at
+    // its pre-transfer value until somebody happened to open that screen again,
+    // however many days later. Meanwhile the per-commodity manifest below,
+    // taken from this very same payload, had already moved on -- so the summary
+    // and the hold it summarises disagreed, and the summary was the wrong one.
+    $capacity = is_array($data['capacity'] ?? null) ? $data['capacity'] : [];
+    if ($capacity !== [] && !$journalFresh && !fc_cargo_journal_fresh($carrier, $ts)) {
+        // Two lines here, one number in the journal: cargo held back from the
+        // market is still cargo in the hold, so they add. Taking cargoForSale
+        // alone -- which is the obvious reading, and what the squadron path
+        // does -- would report a carrier selling nothing as empty.
+        $cargo = null;
+        foreach (['cargoForSale', 'cargoNotForSale'] as $key) {
+            if (isset($capacity[$key]) && is_numeric($capacity[$key])) {
+                $cargo = (int) $cargo + (int) $capacity[$key];
+            }
+        }
+        if ($cargo !== null) {
+            $fields['space_cargo'] = $cargo;
+        }
+
+        foreach ([
+            'space_crew' => 'crew',
+            'space_reserved' => 'cargoSpaceReserved',
+            'space_shippacks' => 'shipPacks',
+            'space_modulepacks' => 'modulePacks',
+            'space_free' => 'freeSpace',
+        ] as $column => $key) {
+            if (isset($capacity[$key]) && is_numeric($capacity[$key])) {
+                $fields[$column] = (int) $capacity[$key];
+            }
+        }
+
+        // Frontier reports the parts and never the whole. The parts sum to it,
+        // which is how fc_squadron_apply_capacity arrives at a hull size it has
+        // no other way to learn -- but a carrier that has ever sent CarrierStats
+        // already has the real TotalCapacity, and that does not change. So this
+        // only fills a gap; it never argues with a figure the game gave us.
+        $parts = ['space_cargo', 'space_crew', 'space_reserved', 'space_shippacks', 'space_modulepacks', 'space_free'];
+        $known = array_intersect_key($fields, array_flip($parts));
+        if (($carrier['capacity'] ?? null) === null && count($known) === count($parts)) {
+            $fields['capacity'] = array_sum($known);
+        }
     }
 
     if (isset($itinerary['totalDistanceJumpedLY']) && is_numeric($itinerary['totalDistanceJumpedLY'])) {
@@ -452,10 +523,19 @@ function fc_capi_apply_services_crew(int $id, array $data, string $ts): void
     }
 }
 
-function fc_capi_apply_cargo(int $id, array $data, string $ts): void
+function fc_capi_apply_cargo(int $id, array $carrier, array $data, string $ts): void
 {
     $cargo = $data['cargo'] ?? null;
     if (!is_array($cargo)) {
+        return;
+    }
+
+    // A CargoTransfer the game reported minutes ago beats a manifest Frontier
+    // built from a cache older than that. Without this the delta applied by
+    // fc_ev_cargo_transfer would be wiped by the very next sync and the hold
+    // would visibly jump back to its pre-transfer contents -- the same failure
+    // that had a refuelled tank reverting from 1000 t to 906 t.
+    if (fc_cargo_journal_fresh($carrier, $ts)) {
         return;
     }
 

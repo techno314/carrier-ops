@@ -36,7 +36,7 @@ import myNotebook as nb
 from config import appname, appversion, config
 
 PLUGIN_NAME = "CarrierOps"
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.4.0"
 
 CFG_URL = "carrierops_url"
 CFG_KEY = "carrierops_apikey"
@@ -77,6 +77,7 @@ SNAPSHOT_FILES = {
 # Sent the moment they arrive rather than waiting for the batch timer: these
 # are the ones somebody might be watching the board for.
 URGENT_EVENTS = frozenset({
+    "CargoTransfer",
     "CarrierStats",
     "CarrierJump",
     "CarrierJumpRequest",
@@ -135,6 +136,10 @@ class CarrierOps:
 
         # Market ids seen on carrier events this session; see is_carrier_station.
         self.known_carriers: set[int] = set()
+        # The carrier we are currently docked at, or None. CargoTransfer is
+        # written in the ship's journal and names no carrier at all, so this is
+        # the only thing that says which one the cargo went to or came from.
+        self.docked_carrier: Optional[int] = None
 
         self.status_var: Optional[tk.StringVar] = None
         self.status_widget: Optional[tk.Widget] = None
@@ -521,6 +526,35 @@ def journal_entry(
         return None
 
     event = entry.get("event")
+
+    # Where we are. Docked and Location are not forwarded -- the board gets a
+    # carrier's position from its own events -- but they are what tells us
+    # which carrier a subsequent CargoTransfer is about.
+    if event in ("Docked", "Location"):
+        at_carrier = entry.get("StationType") == "FleetCarrier"
+        market_id = entry.get("MarketID")
+        ops.docked_carrier = market_id if at_carrier and isinstance(market_id, int) else None
+        if at_carrier:
+            ops.remember_carrier(entry)
+    elif event in ("Undocked", "LoadGame", "Shutdown"):
+        ops.docked_carrier = None
+
+    if event == "CargoTransfer":
+        # Deliberately not in CARRIER_EVENTS, and deliberately not backfilled.
+        #
+        # This is the only event the board applies as a *delta* rather than a
+        # reading -- it says 1216 t of tritium moved, not what the hold now
+        # holds. That is only sound while it is the live stream: replaying an
+        # old journal would subtract cargo a second time from a manifest the
+        # Companion API has since corrected. So it is sent as it happens and
+        # never re-sent, and "Upload past journals" skips it.
+        if ops.docked_carrier is None:
+            return None
+        # The board matches carriers on CarrierID or MarketID and the event has
+        # neither. The MarketID we are docked at is the carrier the cargo moved
+        # to or from -- that is what "docked" means for a transfer.
+        ops.enqueue_event({**entry, "MarketID": ops.docked_carrier})
+        return None
 
     if event in CARRIER_EVENTS:
         ops.remember_carrier(entry)

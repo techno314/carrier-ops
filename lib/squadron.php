@@ -364,7 +364,7 @@ function fc_squadron_apply(int $carrierId, array $squadron, array $sc, string $t
     // No market block means no market.services, so servicesCrew is the only
     // thing that can say which services a squadron carrier has at all.
     fc_capi_apply_services_crew($carrierId, $sc, $ts);
-    fc_capi_apply_cargo($carrierId, $sc, $ts);
+    fc_capi_apply_cargo($carrierId, $carrier, $sc, $ts);
     fc_capi_apply_orders($carrierId, $sc, $ts);
     fc_capi_apply_itinerary($carrierId, $sc);
 }

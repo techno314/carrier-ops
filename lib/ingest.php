@@ -47,6 +47,10 @@ const FC_OWNER_EVENTS = [
     'CarrierJumpCancelled', 'CarrierDepositFuel', 'CarrierDockingPermission',
     'CarrierNameChanged', 'CarrierNameChange', 'CarrierShipPack',
     'CarrierModulePack', 'CarrierDecommission', 'CarrierCancelDecommission',
+    // Written in the *ship's* journal, not the carrier's, and it names no
+    // carrier at all -- the plugin adds the MarketID it was docked at. Owner
+    // only, because it moves someone's cargo about.
+    'CargoTransfer',
 ];
 
 /** Events anyone can contribute, because visitors see them too. */
@@ -391,6 +395,7 @@ function fc_apply_event(array $event, array $user, array &$report): bool
         'CarrierCrewServices' => fc_ev_crew($carrier, $event, $ts),
         'CarrierShipPack', 'CarrierModulePack' => fc_ev_pack($carrier, $event, $ts, $name),
         'CarrierTradeOrder' => fc_ev_trade_order($carrier, $event, $ts),
+        'CargoTransfer' => fc_ev_cargo_transfer($carrier, $event, $ts),
         'CarrierJumpRequest' => fc_ev_jump_request($carrier, $event, $ts),
         'CarrierJumpCancelled' => fc_ev_jump_cancelled($carrier, $event, $ts),
         'CarrierJump', 'CarrierLocation', 'Docked', 'Location' => fc_ev_location($carrier, $event, $ts, $name),
@@ -717,6 +722,114 @@ function fc_ev_trade_order(array $carrier, array $event, ?string $ts): bool
             'ts' => $ts,
         ],
     );
+    return true;
+}
+
+/**
+ * Cargo moved between a ship and the carrier it is docked at.
+ *
+ * The one part of the hold the game reports as it happens. CarrierStats has the
+ * tonnage but is only written when the owner opens the management screen, and
+ * the Companion API has the full manifest but runs ten to fifteen minutes
+ * behind -- so without this, moving 1,216 t of tritium off a carrier left the
+ * board showing the old figure until one of those two happened to catch up.
+ *
+ * Applied as a delta rather than a reading, because a delta is all the event
+ * is. That means it can drift: a transfer made with the plugin closed is never
+ * seen, and the arithmetic here silently assumes it saw everything. The next
+ * Companion API sync replaces the whole manifest and puts it right, which is
+ * why this deliberately stops short of trying to be authoritative -- it is a
+ * good guess for the fifteen minutes before the real answer arrives.
+ */
+function fc_ev_cargo_transfer(array $carrier, array $event, ?string $ts): bool
+{
+    $transfers = $event['Transfers'] ?? null;
+    if ($ts === null || !is_array($transfers) || $transfers === []) {
+        return false;
+    }
+    // Re-uploading an old journal must not re-apply moves already counted.
+    if (fc_stale($carrier, 'cargo_journal_at', $ts)) {
+        return false;
+    }
+
+    $id = (int) $carrier['id'];
+    $net = 0;
+    $applied = false;
+
+    foreach ($transfers as $transfer) {
+        if (!is_array($transfer)) {
+            continue;
+        }
+        $commodity = fc_clean_symbol($transfer['Type'] ?? null);
+        $count = isset($transfer['Count']) ? (int) $transfer['Count'] : 0;
+        $direction = strtolower((string) ($transfer['Direction'] ?? ''));
+        if ($commodity === '' || $count <= 0 || !in_array($direction, ['tocarrier', 'toship'], true)) {
+            continue;
+        }
+
+        $delta = $direction === 'tocarrier' ? $count : -$count;
+        $net += $delta;
+        $applied = true;
+
+        if ($delta > 0) {
+            // A stack we have never seen has no value to record: the event
+            // carries a count and nothing else. Left at zero rather than
+            // guessed at, and corrected by the next sync.
+            fc_exec(
+                'INSERT INTO fc_cargo (carrier_id, commodity, stolen, loc_name, qty, value)
+                 VALUES (:cid, :c, 0, :loc, :qty, 0)
+                 ON DUPLICATE KEY UPDATE qty = qty + VALUES(qty)',
+                [
+                    'cid' => $id,
+                    'c' => mb_substr($commodity, 0, 64),
+                    'loc' => $transfer['Type_Localised'] ?? null,
+                    'qty' => $delta,
+                ],
+            );
+        } else {
+            // Scale the stack's worth with what is left of it. `value` is the
+            // whole stack rather than a unit price, so leaving it alone would
+            // have a half-empty hold still valued as a full one.
+            // stolen = 0 on both sides of this. The hold keys stolen and clean
+            // stacks separately, and the event says which commodity moved but
+            // never which of the two -- so it is applied to the stack that
+            // actually turns up on a carrier. Guessing wrong costs one sync.
+            fc_exec(
+                'UPDATE fc_cargo
+                    SET value = CASE WHEN qty > 0 THEN CAST(value * GREATEST(qty + :d1, 0) / qty AS SIGNED) ELSE 0 END,
+                        qty = GREATEST(qty + :d2, 0)
+                  WHERE carrier_id = :cid AND commodity = :c AND stolen = 0',
+                ['d1' => $delta, 'd2' => $delta, 'cid' => $id, 'c' => mb_substr($commodity, 0, 64)],
+            );
+            fc_exec(
+                'DELETE FROM fc_cargo WHERE carrier_id = :cid AND commodity = :c AND stolen = 0 AND qty <= 0',
+                ['cid' => $id, 'c' => mb_substr($commodity, 0, 64)],
+            );
+        }
+    }
+
+    if (!$applied) {
+        return false;
+    }
+
+    $fields = ['cargo_journal_at' => $ts];
+
+    // The summary has to move with the manifest, or the board shows a hold
+    // whose contents disagree with its own total. Clamped at both ends: the
+    // free space cannot go negative, and cannot exceed a capacity we may not
+    // know yet.
+    if ($carrier['space_cargo'] !== null) {
+        $fields['space_cargo'] = max(0, (int) $carrier['space_cargo'] + $net);
+    }
+    if ($carrier['space_free'] !== null) {
+        $free = (int) $carrier['space_free'] - $net;
+        if ($carrier['capacity'] !== null) {
+            $free = min($free, (int) $carrier['capacity']);
+        }
+        $fields['space_free'] = max(0, $free);
+    }
+
+    fc_update_carrier($id, $fields);
     return true;
 }
 

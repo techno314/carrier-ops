@@ -14,7 +14,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 16;
+const FC_SCHEMA_VERSION = 17;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -103,6 +103,11 @@ function fc_ensure_columns(): void
             'total_distance_jumped' => 'DOUBLE NULL',
             'capi_at' => 'DATETIME NULL',
             'cargo_at' => 'DATETIME NULL',
+            // When the *game* last told us the hold changed, as opposed to
+            // cargo_at, which the Companion API stamps for itself. Only a
+            // column CAPI never writes can be used to decide that CAPI is the
+            // stale one -- see fc_journal_fresh.
+            'cargo_journal_at' => 'DATETIME NULL',
             // When the order book was last confirmed against the game. Until
             // it has been, the orders table is only what the journal saw
             // created and never saw filled.

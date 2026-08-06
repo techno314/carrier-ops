@@ -48,6 +48,26 @@ directly, it keeps doing so with the game shut and EDMC closed — which the old
 
 Nothing in EDMC needs configuring for this any more.
 
+### What changed in 1.4.0
+
+Moving cargo on or off a carrier now shows on the board straight away.
+
+It used to wait, and could wait a very long time. The hold has two sources and neither is prompt:
+`CarrierStats` carries the tonnage but the game only writes it when you open the carrier management
+screen, and the Companion API has the full manifest but runs 10–15 minutes behind. So transferring
+1,216 t of tritium off a carrier left the board showing the old figure until one of those two
+happened to catch up — which, if you did not open that screen again, could be days.
+
+`CargoTransfer` is the one thing the game reports as it happens, so the plugin now sends it, and the
+board applies it immediately and holds the Companion API off until its cache has caught up.
+
+It is applied as a *change* rather than a reading — the event says 1,216 t of tritium moved, not what
+the hold now contains. That means it can drift: a transfer made with EDMC closed is never seen, and
+the arithmetic assumes it saw everything. The next Companion API sync replaces the whole manifest and
+corrects any drift, so this is a good answer for the fifteen minutes before the exact one arrives.
+For the same reason **Upload past journals** skips these deliberately — replaying an old transfer
+would subtract the same cargo twice.
+
 ### What changed in 1.3.0
 
 Earlier versions forwarded each `/fleetcarrier` payload EDMC had fetched, which required
@@ -61,10 +81,16 @@ guards against that now, but not sending the stale copy at all is the better fix
 
 ## What it sends
 
-Only fleet carrier events, listed explicitly in `CARRIER_EVENTS` at the top of `load.py`. Every
-other journal entry EDMC hands the plugin is checked for its event name and then dropped — nothing
-about where you have been, what you scanned, who you fought or what was said in chat leaves your
-machine.
+Only fleet carrier events, listed explicitly in `CARRIER_EVENTS` at the top of `load.py`, plus
+`CargoTransfer` while you are docked at a carrier. Every other journal entry EDMC hands the plugin is
+checked for its event name and then dropped — nothing about where you have been, what you scanned,
+who you fought or what was said in chat leaves your machine.
+
+One clarification, since 1.4.0 reads two events it does not send. `CargoTransfer` is written in your
+*ship's* journal and names no carrier at all, so the plugin has to know which one you are standing
+in: it watches `Docked` and `Location` for the market id, and only when the station is a fleet
+carrier. Dock anywhere else and that is cleared, so no starport you visit is recorded or sent. The
+transfer itself is only sent while a carrier is what you are docked at.
 
 Snapshot files are only sent when the station is a carrier. `Market.json` says so directly;
 `Shipyard.json` and `Outfitting.json` do not carry a station type at all, so the plugin matches the
