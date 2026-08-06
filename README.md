@@ -171,10 +171,22 @@ curl -H "X-API-Key: $KEY" "https://grayflare.space/fc/api.php?action=carrier&id=
 
 # public carriers
 curl "https://grayflare.space/fc/api.php?action=carriers&q=colonia"
+
+# a colonisation build several people are hauling to
+curl -H "X-API-Key: $KEY" "https://grayflare.space/fc/api.php?action=colony&site=Cunha+Gateway"
+
+# report what you can see of one, and get the merged view back
+curl -X POST "https://grayflare.space/fc/api.php?action=colony_report"   -H "X-API-Key: $KEY" -H "Content-Type: application/json"   -d '{"marketId":3966379778,"cmdr":"Alice","stock":[{"commodity":"steel","carrier":40000}]}'
 ```
 
 `action=carrier` takes either a CarrierID or a callsign. Finance, upkeep and cargo appear only when
 the key owns the carrier.
+
+`action=colony` looks a build up by the name people say out loud, and returns what the site wants
+against what the group is holding, split by person. Both colony routes want a key: a build's shopping
+list is the group's business rather than the public's. Reports are additive — each key contributes
+its own position and nobody can contradict anybody else — except the site manifest, where the most
+recent reading wins outright and an older one is refused.
 
 ## Layout
 
