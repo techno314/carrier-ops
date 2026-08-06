@@ -1066,6 +1066,98 @@ function fc_purge_user(int $userId): int
 }
 
 /**
+ * Every table a carrier's data lives in, and what it holds.
+ *
+ * Written out rather than discovered, so that adding a table and forgetting
+ * this list is a visible omission in a diff instead of rows quietly surviving
+ * a deletion. The labels are the confirmation screen's, which is the only
+ * place an admin gets to see what they are about to destroy.
+ *
+ * @return array<string,string>
+ */
+function fc_carrier_tables(): array
+{
+    return [
+        'fc_ledger' => 'ledger entries',
+        'fc_itinerary' => 'itinerary stops',
+        'fc_jumps' => 'jumps',
+        'fc_market' => 'market listings',
+        'fc_orders' => 'trade orders',
+        'fc_cargo' => 'cargo lines',
+        'fc_crew' => 'crew and services',
+        'fc_shipyard' => 'shipyard stock',
+        'fc_outfitting' => 'outfitting stock',
+        'fc_webhooks' => 'webhooks',
+    ];
+}
+
+/** How much there is to lose, per table. @return array<string,int> */
+function fc_carrier_row_counts(int $carrierId): array
+{
+    $counts = [];
+    foreach (array_keys(fc_carrier_tables()) as $table) {
+        $row = fc_one("SELECT COUNT(*) AS n FROM {$table} WHERE carrier_id = :id", ['id' => $carrierId]);
+        $counts[$table] = (int) ($row['n'] ?? 0);
+    }
+    return $counts;
+}
+
+/**
+ * Erase a carrier and everything recorded about it.
+ *
+ * Unlike deleting an account, which releases carriers rather than removing
+ * them, this is the real thing: the history is what the board is for, and it
+ * does not survive.
+ *
+ * Two things it deliberately does not do. It does not disconnect the Frontier
+ * link, so a carrier whose owner is still connected reappears at the next sync
+ * as a bare row with current data and no past -- the confirmation screen says
+ * so, because it is the difference between removing a carrier and resetting
+ * one. And it does not reach into Discord to delete board posts already
+ * published there; fc_purge_user leaves those alone too, and a message nobody
+ * can now update is still better than one we might delete from the wrong
+ * channel.
+ *
+ * @return array<string,int> rows removed per table, plus 'total'
+ */
+function fc_delete_carrier(int $carrierId): array
+{
+    $removed = [];
+    $db = fc_db();
+    $db->beginTransaction();
+
+    try {
+        // Queue and message rows hang off the webhook, not the carrier, so they
+        // have to go before fc_webhooks takes their parent away.
+        $removed['fc_webhook_queue'] = fc_exec(
+            'DELETE q FROM fc_webhook_queue q
+               JOIN fc_webhooks w ON w.id = q.webhook_id
+              WHERE w.carrier_id = :id',
+            ['id' => $carrierId],
+        );
+        $removed['fc_webhook_messages'] = fc_exec(
+            'DELETE m FROM fc_webhook_messages m
+               JOIN fc_webhooks w ON w.id = m.webhook_id
+              WHERE w.carrier_id = :id',
+            ['id' => $carrierId],
+        );
+
+        foreach (array_keys(fc_carrier_tables()) as $table) {
+            $removed[$table] = fc_exec("DELETE FROM {$table} WHERE carrier_id = :id", ['id' => $carrierId]);
+        }
+
+        $removed['fc_carriers'] = fc_exec('DELETE FROM fc_carriers WHERE id = :id', ['id' => $carrierId]);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
+
+    $removed['total'] = array_sum($removed);
+    return $removed;
+}
+
+/**
  * Carry out deletions whose grace period has run out.
  *
  * @return int accounts erased

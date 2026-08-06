@@ -78,6 +78,46 @@ function fc_handle_admin_post(string $action, array $admin): void
         return;
     }
 
+    // Carriers, like maintenance, are not accounts, so they are settled before
+    // the account lookup below.
+    if ($action === 'admin_carrier_delete') {
+        $carrierId = (int) ($_POST['carrier_id'] ?? 0);
+        $carrier = $carrierId === 0 ? null : fc_carrier($carrierId);
+        if ($carrier === null) {
+            fc_flash('No such carrier.', 'err');
+            return;
+        }
+
+        // Typed by hand, and it has to match. A carrier is deleted from a list
+        // where the rows differ by a few characters, so a misclick is the
+        // likely way this ever gets used wrongly -- and a misclick cannot type
+        // a callsign. Case and surrounding space are forgiven; nothing else is.
+        $expected = fc_carrier_confirm_phrase($carrier);
+        $typed = trim((string) ($_POST['confirm'] ?? ''));
+        if (mb_strtolower($typed) !== mb_strtolower($expected)) {
+            fc_flash(
+                $typed === ''
+                    ? 'Type ' . $expected . ' to confirm. Nothing was deleted.'
+                    : 'That did not match ' . $expected . '. Nothing was deleted.',
+                'err',
+            );
+            fc_redirect(fc_url('admin.php') . '?delete_carrier=' . $carrierId);
+        }
+
+        $name = fc_carrier_display_name($carrier);
+        $removed = fc_delete_carrier($carrierId);
+        $rows = (int) $removed['total'] - (int) $removed['fc_carriers'];
+        fc_flash(
+            $name . ' is gone, with ' . fc_num($rows) . ' row' . ($rows === 1 ? '' : 's')
+            . ' of its history. '
+            . ($carrier['owner_user_id'] !== null || fc_is_squadron_carrier($carrier)
+                ? 'It is still reachable through a Frontier link, so a bare row will reappear at the '
+                    . 'next sync — with current data and no past.'
+                : 'Nothing will bring it back on its own.')
+        );
+        return;
+    }
+
     $targetId = (int) ($_POST['user_id'] ?? 0);
     if ($targetId === 0) {
         return;
@@ -166,8 +206,125 @@ function fc_handle_admin_post(string $action, array $admin): void
     }
 }
 
+/**
+ * What an admin must type to delete this carrier.
+ *
+ * The callsign, because it identifies exactly one carrier and is short enough
+ * to retype without resenting it. A carrier with no callsign yet -- claimed
+ * from a payload that had only an id -- falls back to whatever the board calls
+ * it, so there is always something to ask for.
+ */
+function fc_carrier_confirm_phrase(array $carrier): string
+{
+    $callsign = trim((string) ($carrier['callsign'] ?? ''));
+    return $callsign !== '' ? $callsign : fc_carrier_display_name($carrier);
+}
+
+/**
+ * The screen that stands between a click and an irreversible deletion.
+ *
+ * Its own page rather than a dialog on the list. Deleting a carrier destroys
+ * history that no sync will ever bring back, so it is worth the interruption of
+ * leaving the table entirely, seeing what is about to go, and typing the name.
+ */
+function fc_render_carrier_delete_confirm(array $carrier): void
+{
+    $counts = fc_carrier_row_counts((int) $carrier['id']);
+    $labels = fc_carrier_tables();
+    $total = array_sum($counts);
+    $phrase = fc_carrier_confirm_phrase($carrier);
+    $owner = $carrier['owner_user_id'] === null
+        ? null
+        : fc_one('SELECT username FROM fc_users WHERE id = :id', ['id' => $carrier['owner_user_id']]);
+    ?>
+    <main class="wrap">
+      <h1>Delete carrier</h1>
+      <?php fc_render_flash(); ?>
+
+      <div class="card">
+        <h2><?= fc_e(fc_carrier_display_name($carrier)) ?>
+          <span class="badge bad">Permanent</span>
+        </h2>
+        <div class="small muted" style="margin-bottom:14px">
+          <span class="mono"><?= fc_e($carrier['callsign'] ?? (string) $carrier['id']) ?></span>
+          · <?= $owner === null ? 'unclaimed' : 'owned by ' . fc_e($owner['username']) ?>
+          · last updated <?= fc_e(fc_ago($carrier['updated_at'])) ?>
+        </div>
+
+        <?php if ($total === 0): ?>
+          <div class="banner">
+            Nothing is recorded against this carrier beyond the row itself.
+          </div>
+        <?php else: ?>
+          <div class="banner warn">
+            <strong><?= fc_num($total) ?> row<?= $total === 1 ? '' : 's' ?></strong> will be destroyed,
+            and no sync will bring any of it back.
+          </div>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>What goes</th><th class="num">Rows</th></tr></thead>
+              <tbody>
+              <?php foreach ($counts as $table => $n): ?>
+                <?php if ($n === 0) { continue; } ?>
+                <tr>
+                  <td><?= fc_e($labels[$table]) ?></td>
+                  <td class="num"><?= fc_num($n) ?></td>
+                </tr>
+              <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+        <?php endif; ?>
+
+        <p class="small dim">
+          <?php if ($carrier['owner_user_id'] !== null): ?>
+            Its owner is still connected to Frontier. That connection is not touched here, so a bare
+            row will reappear at the next sync — with current data and none of the history above. To
+            remove it for good, disconnect the owner's Frontier account first.
+          <?php elseif (fc_is_squadron_carrier($carrier)): ?>
+            No account owns this carrier, but it belongs to a squadron — any connected member's sync
+            reports it, so a bare row will reappear with current data and none of the history above.
+          <?php else: ?>
+            No account owns this carrier, so nothing will recreate it.
+          <?php endif; ?>
+          Board posts already published to Discord are left where they are; nothing here can update them
+          afterwards.
+        </p>
+
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+          <input type="hidden" name="carrier_id" value="<?= (int) $carrier['id'] ?>">
+          <div class="field">
+            <label for="confirm">Type <strong class="mono"><?= fc_e($phrase) ?></strong> to confirm</label>
+            <input id="confirm" name="confirm" type="text" autocomplete="off" autocapitalize="off"
+                   spellcheck="false" required placeholder="<?= fc_e($phrase) ?>">
+          </div>
+          <div class="actions">
+            <button class="btn danger" type="submit" name="action" value="admin_carrier_delete">
+              Delete permanently
+            </button>
+            <a class="btn ghost" href="<?= fc_e(fc_url('admin.php')) ?>">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </main>
+    <?php
+}
+
 function fc_render_admin(array $admin): void
 {
+    // The confirmation screen replaces the panel rather than sitting inside it,
+    // so there is nothing else on the page to click by accident.
+    $pending = (int) ($_GET['delete_carrier'] ?? 0);
+    if ($pending !== 0) {
+        $carrier = fc_carrier($pending);
+        if ($carrier !== null) {
+            fc_render_carrier_delete_confirm($carrier);
+            return;
+        }
+        fc_flash('No such carrier.', 'err');
+    }
+
     // GROUP_CONCAT wants a quoted separator, and this query is a single-quoted
     // PHP string, so the two would fight: an unescaped quote closes the string
     // and the rest of the SQL is silently passed as the parameter array. The
@@ -434,7 +591,7 @@ function fc_render_admin(array $admin): void
         <?php else: ?>
           <div class="tablewrap">
             <table>
-              <thead><tr><th>Carrier</th><th>Owner</th><th>System</th><th>Listed</th><th>Updated</th></tr></thead>
+              <thead><tr><th>Carrier</th><th>Owner</th><th>System</th><th>Listed</th><th>Updated</th><th></th></tr></thead>
               <tbody>
               <?php foreach ($carriers as $c): ?>
                 <tr>
@@ -448,12 +605,24 @@ function fc_render_admin(array $admin): void
                       ? '<span class="badge on">Public</span>'
                       : '<span class="badge off">Private</span>' ?></td>
                   <td class="small muted nowrap"><?= fc_e(fc_ago($c['updated_at'])) ?></td>
+                  <td class="right nowrap">
+                    <!-- A link, not a button: it only opens the confirmation
+                         screen, and nothing is destroyed until a name has been
+                         typed there. -->
+                    <a class="btn danger ghost sm"
+                       href="<?= fc_e(fc_url('admin.php')) ?>?delete_carrier=<?= (int) $c['id'] ?>">Delete</a>
+                  </td>
                 </tr>
               <?php endforeach; ?>
               </tbody>
             </table>
           </div>
         <?php endif; ?>
+        <p class="small dim" style="margin-bottom:0">
+          Deleting a carrier removes its whole history — ledger, jumps, itinerary, market — and no sync
+          restores any of it. That is the opposite of deleting an account, which releases its carriers and
+          keeps everything.
+        </p>
       </div>
 
       <div class="card">
