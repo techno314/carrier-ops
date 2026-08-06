@@ -1109,14 +1109,16 @@ function fc_carrier_row_counts(int $carrierId): array
  * them, this is the real thing: the history is what the board is for, and it
  * does not survive.
  *
- * Two things it deliberately does not do. It does not disconnect the Frontier
- * link, so a carrier whose owner is still connected reappears at the next sync
- * as a bare row with current data and no past -- the confirmation screen says
- * so, because it is the difference between removing a carrier and resetting
- * one. And it does not reach into Discord to delete board posts already
- * published there; fc_purge_user leaves those alone too, and a message nobody
- * can now update is still better than one we might delete from the wrong
- * channel.
+ * It deliberately leaves the Frontier link alone, so a carrier still reachable
+ * through one comes back at the next sync as a fresh row with current data and
+ * no past. That is the intended shape of this: a way to start a carrier's
+ * records over, not a way to keep one off the board. Making it stick would mean
+ * either disconnecting somebody's Frontier account or keeping a list of ids to
+ * refuse, and neither belongs behind a Delete button.
+ *
+ * It also does not reach into Discord to delete board posts already published
+ * there; fc_purge_user leaves those alone too, and a message nobody can now
+ * update is still better than one we might delete from the wrong channel.
  *
  * @return array<string,int> rows removed per table, plus 'total'
  */

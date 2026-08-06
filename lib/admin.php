@@ -111,9 +111,8 @@ function fc_handle_admin_post(string $action, array $admin): void
             $name . ' is gone, with ' . fc_num($rows) . ' row' . ($rows === 1 ? '' : 's')
             . ' of its history. '
             . ($carrier['owner_user_id'] !== null || fc_is_squadron_carrier($carrier)
-                ? 'It is still reachable through a Frontier link, so a bare row will reappear at the '
-                    . 'next sync — with current data and no past.'
-                : 'Nothing will bring it back on its own.')
+                ? 'A fresh row will appear at the next sync, with current data and no past.'
+                : 'Nothing connected reports it, so it will stay gone until something does.')
         );
         return;
     }
@@ -243,7 +242,7 @@ function fc_render_carrier_delete_confirm(array $carrier): void
 
       <div class="card">
         <h2><?= fc_e(fc_carrier_display_name($carrier)) ?>
-          <span class="badge bad">Permanent</span>
+          <span class="badge bad">Clears history</span>
         </h2>
         <div class="small muted" style="margin-bottom:14px">
           <span class="mono"><?= fc_e($carrier['callsign'] ?? (string) $carrier['id']) ?></span>
@@ -256,9 +255,12 @@ function fc_render_carrier_delete_confirm(array $carrier): void
             Nothing is recorded against this carrier beyond the row itself.
           </div>
         <?php else: ?>
+          <!-- Only the history, because whether the carrier comes back depends
+               on what is connected -- the paragraph below settles that for this
+               carrier rather than hedging about it here. -->
           <div class="banner warn">
-            <strong><?= fc_num($total) ?> row<?= $total === 1 ? '' : 's' ?></strong> will be destroyed,
-            and no sync will bring any of it back.
+            <strong><?= fc_num($total) ?> row<?= $total === 1 ? '' : 's' ?></strong> will go, and none of
+            this history comes back.
           </div>
           <div class="tablewrap">
             <table>
@@ -278,14 +280,15 @@ function fc_render_carrier_delete_confirm(array $carrier): void
 
         <p class="small dim">
           <?php if ($carrier['owner_user_id'] !== null): ?>
-            Its owner is still connected to Frontier. That connection is not touched here, so a bare
-            row will reappear at the next sync — with current data and none of the history above. To
-            remove it for good, disconnect the owner's Frontier account first.
+            Its owner is still connected to Frontier, so a fresh row will appear at the next sync with
+            current data and no past. That is the normal outcome and nothing needs doing about it:
+            this clears what the board has recorded, it does not unclaim the carrier.
           <?php elseif (fc_is_squadron_carrier($carrier)): ?>
-            No account owns this carrier, but it belongs to a squadron — any connected member's sync
-            reports it, so a bare row will reappear with current data and none of the history above.
+            This is a squadron carrier, so any connected member's sync will bring a fresh row back with
+            current data and no past. That is the normal outcome: this clears what the board has
+            recorded, it does not remove the carrier from the squadron.
           <?php else: ?>
-            No account owns this carrier, so nothing will recreate it.
+            Nothing is connected that would report this carrier, so it will stay gone until something is.
           <?php endif; ?>
           Board posts already published to Discord are left where they are; nothing here can update them
           afterwards.
@@ -301,7 +304,7 @@ function fc_render_carrier_delete_confirm(array $carrier): void
           </div>
           <div class="actions">
             <button class="btn danger" type="submit" name="action" value="admin_carrier_delete">
-              Delete permanently
+              Delete <?= fc_e(fc_carrier_display_name($carrier)) ?>
             </button>
             <a class="btn ghost" href="<?= fc_e(fc_url('admin.php')) ?>">Cancel</a>
           </div>
@@ -619,9 +622,9 @@ function fc_render_admin(array $admin): void
           </div>
         <?php endif; ?>
         <p class="small dim" style="margin-bottom:0">
-          Deleting a carrier removes its whole history — ledger, jumps, itinerary, market — and no sync
-          restores any of it. That is the opposite of deleting an account, which releases its carriers and
-          keeps everything.
+          Deleting a carrier clears its history — ledger, jumps, itinerary, market — which no sync restores.
+          The carrier itself comes back at the next sync if anything is still connected to report it, which
+          is what makes this a way to start a carrier's records over rather than a way to remove one.
         </p>
       </div>
 
