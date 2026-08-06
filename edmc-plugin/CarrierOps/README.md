@@ -48,6 +48,13 @@ directly, it keeps doing so with the game shut and EDMC closed — which the old
 
 Nothing in EDMC needs configuring for this any more.
 
+### What changed in 1.4.1
+
+1.4.0 dropped transfers if EDMC had been started while you were already docked at the carrier —
+which, since installing it means restarting EDMC, was most of the time. The plugin only knew where
+you were from the `Docked` event, and EDMC begins reading the journal where it currently ends, so
+that event had already gone past. It now reads the journal for the answer when it does not have one.
+
 ### What changed in 1.4.0
 
 Moving cargo on or off a carrier now shows on the board straight away.

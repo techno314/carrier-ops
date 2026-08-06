@@ -36,7 +36,7 @@ import myNotebook as nb
 from config import appname, appversion, config
 
 PLUGIN_NAME = "CarrierOps"
-PLUGIN_VERSION = "1.4.0"
+PLUGIN_VERSION = "1.4.1"
 
 CFG_URL = "carrierops_url"
 CFG_KEY = "carrierops_apikey"
@@ -400,6 +400,53 @@ def journal_dir() -> str:
     return configured if configured else config.default_journal_dir
 
 
+def docked_carrier_from_journal() -> Optional[int]:
+    """
+    Which carrier are we standing in, according to the journal itself?
+
+    EDMC starts reading where the journal currently ends, so a plugin loaded
+    while the commander is already docked never sees the Docked that put them
+    there. That is not an edge case: installing this plugin means restarting
+    EDMC, and the obvious place to be while doing it is parked at your own
+    carrier. On the first 1.4.0 run that is exactly what happened -- the plugin
+    loaded four minutes after docking, and every transfer was dropped for want
+    of knowing where it was.
+
+    So when the tracked answer is missing, go and read it. Backwards from the
+    end, stopping at the first event that settles the question: the most recent
+    Docked or Location says where we are, an Undocked says we are nowhere.
+    """
+    try:
+        directory = journal_dir()
+        names = [n for n in os.listdir(directory)
+                 if n.startswith("Journal.") and n.endswith(".log")]
+        if not names:
+            return None
+        newest = max(names, key=lambda n: os.path.getmtime(os.path.join(directory, n)))
+        with open(os.path.join(directory, newest), "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except (OSError, ValueError):
+        return None
+
+    for line in reversed(lines):
+        if '"event":"Undocked"' in line:
+            return None
+        if '"event":"Docked"' not in line and '"event":"Location"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("event") not in ("Docked", "Location"):
+            continue
+        if entry.get("StationType") != "FleetCarrier":
+            return None      # docked somewhere that is not a carrier
+        market_id = entry.get("MarketID")
+        return market_id if isinstance(market_id, int) else None
+
+    return None
+
+
 # -- EDMC entry points ------------------------------------------------------
 
 def plugin_start3(plugin_dir: str) -> str:
@@ -548,12 +595,19 @@ def journal_entry(
         # old journal would subtract cargo a second time from a manifest the
         # Companion API has since corrected. So it is sent as it happens and
         # never re-sent, and "Upload past journals" skips it.
-        if ops.docked_carrier is None:
+        carrier_id = ops.docked_carrier
+        if carrier_id is None:
+            # Nothing tracked, which usually means EDMC started after we had
+            # already docked. Read it out of the journal and keep it.
+            carrier_id = docked_carrier_from_journal()
+            ops.docked_carrier = carrier_id
+        if carrier_id is None:
+            logger.debug("Carrier Ops: CargoTransfer with no carrier docked; ignored")
             return None
         # The board matches carriers on CarrierID or MarketID and the event has
         # neither. The MarketID we are docked at is the carrier the cargo moved
         # to or from -- that is what "docked" means for a transfer.
-        ops.enqueue_event({**entry, "MarketID": ops.docked_carrier})
+        ops.enqueue_event({**entry, "MarketID": carrier_id})
         return None
 
     if event in CARRIER_EVENTS:
