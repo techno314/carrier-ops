@@ -254,6 +254,30 @@ case 'carrier':
         ], fc_all('SELECT * FROM fc_orders WHERE carrier_id = :id', ['id' => $carrier['id']]));
     }
 
+    // The hold, item by item. `space.cargo` above is the tonnage and answers
+    // "how full is it"; this answers "is the steel I need already aboard",
+    // which nothing outside the board could ask before.
+    //
+    // Gated on the same 'cargo' topic the web page uses, which for a personal
+    // carrier means the owner and nobody else -- what is in the hold is not
+    // public the way an advertised market is.
+    if (fc_can_view($user, $carrier, 'cargo')) {
+        $out['cargo'] = array_map(static fn(array $c) => [
+            'commodity' => $c['commodity'],
+            'name' => $c['loc_name'],
+            'stolen' => (bool) $c['stolen'],
+            'quantity' => (int) $c['qty'],
+            'value' => (int) $c['value'],
+        ], fc_all(
+            'SELECT * FROM fc_cargo WHERE carrier_id = :id ORDER BY qty DESC, commodity',
+            ['id' => $carrier['id']],
+        ));
+        // When the manifest was last confirmed against Frontier. A client
+        // applying its own journal events on top needs to know from when, or it
+        // will count the same transfer twice.
+        $out['cargoAt'] = $carrier['cargo_at'];
+    }
+
     if (fc_can_view($user, $carrier, 'itinerary')) {
         $out['itinerary'] = array_map(static fn(array $i) => [
             'system' => $i['system'],
