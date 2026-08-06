@@ -448,12 +448,22 @@ function fc_board_status_embed(array $carrier, bool $withFinance): array
         'inline' => true,
     ];
 
+    // What is aboard, not what is left. Measured against the space that can
+    // actually hold cargo rather than against the hull: crew quarters and ship
+    // packs take their share first, and on a fitted-out carrier that is several
+    // thousand tonnes -- so "14,288 t of 25,000 t" would advertise room that
+    // does not exist.
+    $held = $carrier['space_cargo'] === null ? null : (int) $carrier['space_cargo'];
+    $usable = $held === null || $carrier['space_free'] === null
+        ? null
+        : $held + (int) $carrier['space_free'];
+
     $fields[] = [
         'name' => 'Cargo Space',
-        'value' => $carrier['space_free'] === null
+        'value' => $held === null
             ? '—'
-            : fc_num((int) $carrier['space_free']) . ' t free'
-                . ($carrier['capacity'] === null ? '' : "\nof " . fc_num((int) $carrier['capacity']) . ' t'),
+            : fc_num($held) . ' t used'
+                . ($usable === null ? '' : "\nof " . fc_num($usable) . ' t'),
         'inline' => true,
     ];
 
