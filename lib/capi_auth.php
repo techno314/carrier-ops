@@ -57,8 +57,21 @@ const FC_CAPI_REFRESH_MARGIN = 300;
 /** Frontier is a third party; a slow reply must not hold one of five workers. */
 const FC_CAPI_TIMEOUT = 20;
 
-/** Least time between automatic /fleetcarrier calls for one account. */
-const FC_CAPI_MIN_FETCH_INTERVAL = 900;
+/**
+ * Least time between automatic /fleetcarrier calls for one account.
+ *
+ * Fourteen minutes, not fifteen, and the minute matters. The cron fires every
+ * fifteen and a fetch finishes a few seconds after the tick that started it --
+ * so with this set to a matching 900 the next tick arrives about five seconds
+ * too early, is turned away, and the one after it sets the same trap again.
+ * The sync quietly ran every thirty minutes instead of every fifteen, and the
+ * log said `synced=2` throughout because being turned away is not an error.
+ *
+ * Anything below the cron period closes it. Fourteen minutes keeps the real
+ * rate at one call per tick, which is what asking every fifteen minutes always
+ * meant, and stays clear of Frontier's own 10-15 minute cache either way.
+ */
+const FC_CAPI_MIN_FETCH_INTERVAL = 840;
 
 /**
  * Identifies this client to Frontier, in the form they ask for.
