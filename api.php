@@ -272,10 +272,19 @@ case 'carrier':
             'SELECT * FROM fc_cargo WHERE carrier_id = :id ORDER BY qty DESC, commodity',
             ['id' => $carrier['id']],
         ));
-        // When the manifest was last confirmed against Frontier. A client
-        // applying its own journal events on top needs to know from when, or it
-        // will count the same transfer twice.
-        $out['cargoAt'] = $carrier['cargo_at'];
+        // How current the manifest above actually is -- which is a different
+        // question from when Frontier was last asked.
+        //
+        // cargo_at is the Companion API's stamp. But a CargoTransfer is applied
+        // as a delta the moment the plugin reports it, so between syncs the
+        // manifest runs ahead of that timestamp, and cargo_journal_at records
+        // how far. Reporting the older of the two invites precisely the mistake
+        // this field exists to prevent: a client adds its own copy of a transfer
+        // the manifest already contains, and 363 t reads as 726 t.
+        //
+        // Both are 'Y-m-d H:i:s' in UTC, so the later one sorts later.
+        $stamps = array_filter([$carrier['cargo_at'], $carrier['cargo_journal_at']]);
+        $out['cargoAt'] = $stamps === [] ? null : max($stamps);
     }
 
     if (fc_can_view($user, $carrier, 'itinerary')) {
