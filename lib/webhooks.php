@@ -479,7 +479,11 @@ function fc_board_status_embed(array $carrier, bool $withFinance): array
     if ($held !== null) {
         $value = fc_num($held) . ' t aboard';
         if ($usable !== null) {
-            $value .= "\nof " . fc_num($usable) . ' t usable';
+            // Both halves against the same total, so they visibly add up to it
+            // -- the question this field gets asked is "will my load fit", and
+            // that is answered by the free figure rather than the full one.
+            $value .= "\n" . fc_num((int) $carrier['space_free']) . ' t free'
+                . "\nof " . fc_num($usable) . ' t usable';
         }
         if ($overhead > 0 && $carrier['capacity'] !== null) {
             $value .= "\n" . fc_num((int) $carrier['capacity']) . ' t hull, '
