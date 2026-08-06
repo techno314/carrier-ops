@@ -60,6 +60,25 @@ const FC_CAPI_TIMEOUT = 20;
 /** Least time between automatic /fleetcarrier calls for one account. */
 const FC_CAPI_MIN_FETCH_INTERVAL = 900;
 
+/**
+ * Identifies this client to Frontier, in the form they ask for.
+ *
+ * Frontier require every request to the CAPI *and* the authorisation service
+ * to carry a User-Agent matching `EDCD-[A-Za-z]+-[.0-9]+`, so they can trace
+ * whoever is causing them trouble. The previous string named the app and
+ * linked back here, which is friendlier but does not match, and an
+ * unidentifiable client is the kind that gets blocked without warning.
+ *
+ * Nothing is appended: the requirement is a regular expression for the whole
+ * header, and a trailing contact URL would only match on a search rather than
+ * in full. The middle segment is letters only and the last digits and dots,
+ * so the version cannot carry a suffix like -beta either.
+ *
+ * Only Frontier asks for this. The Spansh, Ardent and Discord calls keep
+ * their own descriptive agents.
+ */
+const FC_CAPI_USER_AGENT = 'EDCD-CarrierOps-1.0.0';
+
 // fc_capi_client_id() and fc_capi_configured() live in core.php, beside the
 // other configuration lookups. Every page needs to know whether linking is
 // available in order to draw the nav prompt, and reaching that answer should
@@ -422,7 +441,7 @@ function fc_capi_token_request(array $fields): array
         CURLOPT_CONNECTTIMEOUT => 8,
         CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
-        CURLOPT_USERAGENT => 'CarrierOps (+' . fc_base_url() . '/fc/)',
+        CURLOPT_USERAGENT => FC_CAPI_USER_AGENT,
     ]);
     $body = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -494,7 +513,7 @@ function fc_capi_get(string $path, string $accessToken, string $base = FC_CAPI_B
         CURLOPT_CONNECTTIMEOUT => 8,
         CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
-        CURLOPT_USERAGENT => 'CarrierOps (+' . fc_base_url() . '/fc/)',
+        CURLOPT_USERAGENT => FC_CAPI_USER_AGENT,
     ]);
     $body = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
