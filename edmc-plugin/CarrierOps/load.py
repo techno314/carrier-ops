@@ -36,7 +36,7 @@ import myNotebook as nb
 from config import appname, appversion, config
 
 PLUGIN_NAME = "CarrierOps"
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.3.0"
 
 CFG_URL = "carrierops_url"
 CFG_KEY = "carrierops_apikey"
@@ -459,18 +459,18 @@ def plugin_prefs(parent: nb.Notebook, cmdr: str, is_beta: bool) -> Optional[tk.F
         justify=tk.LEFT,
     ).grid(row=row, column=0, columnspan=3, padx=10, pady=(0, 8), sticky=tk.W)
 
-    # EDMC's own Companion API fleet carrier query is what feeds
-    # capi_fleetcarrier(). Report it rather than switching it on behind their
-    # back -- it is EDMC's setting, not ours.
+    # Exact upkeep and the cargo hold used to come through EDMC's own fleet
+    # carrier query, forwarded by this plugin. The board asks Frontier itself
+    # now, so the thing to point people at is linking there, not an EDMC
+    # setting this plugin no longer reads.
     row += 1
-    if config.get_bool("capi_fleetcarrier", default=False):
-        capi_note = ("Companion API: on. Exact upkeep and the cargo hold will be sent "
-                     "when EDMC queries Frontier.")
-    else:
-        capi_note = ("Companion API: off. Tick 'Enable Fleet Carrier CAPI Queries' in EDMC's\n"
-                     "Configuration tab to also send exact upkeep and the cargo hold.")
-    nb.Label(frame, text=capi_note, justify=tk.LEFT) \
-        .grid(row=row, column=0, columnspan=3, padx=10, pady=(4, 8), sticky=tk.W)
+    nb.Label(
+        frame,
+        text=("Exact upkeep and the cargo hold come from Frontier directly.\n"
+              "Connect your Frontier account on the board's settings page;\n"
+              "it then stays current with the game and EDMC both closed."),
+        justify=tk.LEFT,
+    ).grid(row=row, column=0, columnspan=3, padx=10, pady=(4, 8), sticky=tk.W)
 
     row += 1
     ttk.Button(frame, text="Test connection", command=_test_connection) \
@@ -536,33 +536,21 @@ def journal_entry(
     return None
 
 
-def capi_fleetcarrier(data) -> None:
-    """
-    Frontier's own `/fleetcarrier` payload, by way of EDMC.
-
-    EDMC holds an approved Companion API client id and queries this endpoint
-    itself, then hands the result to plugins. That is worth forwarding, because
-    it carries the two things the journal simply does not have: what the game
-    actually charges for upkeep, and what is in the carrier's hold.
-
-    It is not a replacement for the journal path -- EDMC only asks Frontier at
-    most every 15 minutes, and only when you have ticked the fleet carrier CAPI
-    option in its settings.
-    """
-    if not ops.configured:
-        return
-
-    try:
-        # CAPIData is a dict subclass, but it carries extra attributes that do
-        # not survive json.dumps; take a plain copy first.
-        body = json.dumps(dict(data), separators=(",", ":"))
-    except (TypeError, ValueError) as err:
-        logger.warning("Could not serialise the fleetcarrier payload: %s", err)
-        return
-
-    ops.remember_carrier(dict(data).get("market") or {})
-    ops.queue.put(("fleetcarrier.json", body, 0))
-    logger.debug("Queued a Companion API fleetcarrier payload (%s bytes)", len(body))
+# There was a capi_fleetcarrier() hook here, forwarding the /fleetcarrier
+# payload EDMC had fetched on our behalf. The board holds its own approved
+# Companion API client id now and asks Frontier directly, so the detour is
+# gone.
+#
+# Removing it is not only tidying. What EDMC forwarded was whatever its own
+# call had returned, and Frontier serves that endpoint from a cache which
+# refreshes every 10-15 minutes. Pushing those replies at the board meant a
+# stale figure could arrive seconds after the journal had reported the truth
+# and overwrite it -- a tank refilled to 1000 t going back to 906 t, once per
+# push. The board defends against that now, but not sending the stale copy in
+# the first place is better than filtering it on arrival.
+#
+# The board's own sync also keeps working with the game shut and EDMC closed,
+# which this never could.
 
 
 # -- buttons ----------------------------------------------------------------

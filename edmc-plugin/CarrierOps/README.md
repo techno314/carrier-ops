@@ -39,21 +39,25 @@ trigger if the board looks out of date.
 ## Exact upkeep and the cargo hold
 
 Two things are simply not in the journal: what the game actually charges for upkeep, and what is in
-the carrier's hold. Both are in Frontier's Companion API — and EDMC already holds an approved client
-id and queries it for you.
+the carrier's hold. Both are in Frontier's Companion API, and the board now holds an approved client
+id of its own.
 
-Tick **Enable Fleet Carrier CAPI Queries** in EDMC's *Configuration* tab. The plugin then forwards
-each `/fleetcarrier` payload EDMC receives, and the board's upkeep panel switches from *estimated*
-to the game's own figures, with a Cargo tab alongside.
+**Connect your Frontier account on the board's settings page.** The upkeep panel switches from
+*estimated* to the game's own figures, with a Cargo tab alongside. Because the board asks Frontier
+directly, it keeps doing so with the game shut and EDMC closed — which the old route never could.
 
-EDMC asks Frontier at most every 15 minutes, and only after events like `CarrierStats`,
-`CarrierLocation` or `CargoTransfer`, so this supplements the journal feed rather than replacing it.
-The plugin's settings tab reports whether the option is currently on.
+Nothing in EDMC needs configuring for this any more.
 
-This needs nothing from Frontier. Registering your own Companion API client is possible — apply at
-[user.frontierstore.net](https://user.frontierstore.net/) — but its refresh tokens expire 25 days
-after authorising, so every user would have to log in again roughly monthly. Going through EDMC has
-no such expiry.
+### What changed in 1.3.0
+
+Earlier versions forwarded each `/fleetcarrier` payload EDMC had fetched, which required
+**Enable Fleet Carrier CAPI Queries** in EDMC's *Configuration* tab. That is gone, and the setting no
+longer has any effect on this plugin.
+
+It was worth removing rather than merely redundant. Frontier serves that endpoint from a cache which
+refreshes every 10–15 minutes, so a forwarded reply could land seconds after the journal had reported
+the truth and overwrite it — a tank refuelled to 1000 t reverting to 906 t, once per push. The board
+guards against that now, but not sending the stale copy at all is the better fix.
 
 ## What it sends
 
