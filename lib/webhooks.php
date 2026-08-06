@@ -448,24 +448,46 @@ function fc_board_status_embed(array $carrier, bool $withFinance): array
         'inline' => true,
     ];
 
-    // What is aboard, not what is left. Measured against the space that can
-    // actually hold cargo rather than against the hull: crew quarters and ship
-    // packs take their share first, and on a fitted-out carrier that is several
-    // thousand tonnes -- so "14,288 t of 25,000 t" would advertise room that
-    // does not exist.
+    // What is aboard, not what is left, and measured against the space that
+    // can actually hold cargo rather than against the hull.
+    //
+    // The distinction needs saying out loud, because the two numbers are far
+    // apart and the hull is the one people quote. A 25,000 t carrier with a
+    // full complement of services has around 19,000 t for cargo -- the rest is
+    // crew quarters. Printing "13,072 t of 25,000 t" would advertise nearly
+    // twelve thousand tonnes of room when the real figure is under six, so the
+    // total is the usable one and the shortfall is named rather than left as
+    // an unexplained gap.
     $held = $carrier['space_cargo'] === null ? null : (int) $carrier['space_cargo'];
     $usable = $held === null || $carrier['space_free'] === null
         ? null
         : $held + (int) $carrier['space_free'];
 
-    $fields[] = [
-        'name' => 'Cargo Space',
-        'value' => $held === null
-            ? '—'
-            : fc_num($held) . ' t used'
-                . ($usable === null ? '' : "\nof " . fc_num($usable) . ' t'),
-        'inline' => true,
-    ];
+    // Everything the hull spends on something other than cargo. Kept as one
+    // figure: the breakdown belongs on the board, not in a field this narrow.
+    $overhead = 0;
+    $packs = 0;
+    foreach (['space_crew', 'space_reserved', 'space_shippacks', 'space_modulepacks'] as $column) {
+        $part = $carrier[$column] === null ? 0 : (int) $carrier[$column];
+        $overhead += $part;
+        if ($column !== 'space_crew') {
+            $packs += $part;
+        }
+    }
+
+    $value = '—';
+    if ($held !== null) {
+        $value = fc_num($held) . ' t aboard';
+        if ($usable !== null) {
+            $value .= "\nof " . fc_num($usable) . ' t usable';
+        }
+        if ($overhead > 0 && $carrier['capacity'] !== null) {
+            $value .= "\n" . fc_num((int) $carrier['capacity']) . ' t hull, '
+                . fc_num($overhead) . ' t ' . ($packs > 0 ? 'crew & packs' : 'crew');
+        }
+    }
+
+    $fields[] = ['name' => 'Cargo Space', 'value' => $value, 'inline' => true];
 
     $services = fc_board_services((int) $carrier['id']);
     if ($services !== '') {
