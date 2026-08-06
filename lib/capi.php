@@ -174,6 +174,55 @@ function fc_ingest_capi(array $data, array $user, ?string $ts = null, ?string $c
     ];
 }
 
+/**
+ * How long the journal outranks whatever CAPI reports.
+ *
+ * Frontier's cache refreshes every 10-15 minutes. That matches what was seen
+ * here: a tank refilled to 1000 t was still being reported as 906 t twenty
+ * seconds later, and had caught up within nine.
+ *
+ * The reply itself gives no way to tell. There is no timestamp in the payload
+ * -- checked, and the only date fields are itinerary entries, several of which
+ * carry an arrival before their own departure. Frontier's published endpoint
+ * notes say nothing about caching either. So freshness cannot be compared,
+ * only waited out.
+ *
+ * Thirty minutes is double the worst refresh, deliberately. Set too short and
+ * the original bug returns, with a stale cache overwriting a correct figure;
+ * set too long and the only cost is that an account refuelling with the
+ * journal plugin closed keeps showing the older number for a while longer.
+ * Those are not symmetric, so this errs long.
+ */
+const FC_JOURNAL_GRACE = 1800;
+
+/**
+ * Whether the journal has spoken recently enough to outrank CAPI.
+ *
+ * Only stats_at and fuel_at qualify as markers. They are stamped by journal
+ * ingest and never by CAPI, so they genuinely answer "when did we last hear
+ * from the game itself". location_at, name_at, docking_at and finance_at are
+ * all stamped by CAPI too, so using them would have CAPI reporting its own
+ * freshness back to itself and the guard would never fire.
+ */
+function fc_journal_fresh(array $carrier, string $ts): bool
+{
+    $now = strtotime($ts);
+    if ($now === false) {
+        return false;
+    }
+    foreach (['stats_at', 'fuel_at'] as $column) {
+        $seen = $carrier[$column] ?? null;
+        if ($seen === null) {
+            continue;
+        }
+        $at = strtotime((string) $seen);
+        if ($at !== false && ($now - $at) < FC_JOURNAL_GRACE) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts, ?string $callsign): void
 {
     $finance = is_array($data['finance'] ?? null) ? $data['finance'] : [];
@@ -181,43 +230,66 @@ function fc_capi_apply_carrier(int $id, array $carrier, array $data, string $ts,
 
     $fields = ['capi_at' => $ts];
 
-    if ($callsign !== null) {
+    /**
+     * While the game is feeding us journal events, they win on everything both
+     * sources describe.
+     *
+     * fc_stale() cannot arbitrate here. It compares timestamps, and CAPI's $ts
+     * is when we asked rather than when Frontier last refreshed -- so a reply
+     * built from a stale cache still carries a newer stamp than the journal
+     * write it is about to clobber, and every such check passes. That is how a
+     * tank refilled to 1000 t went back to 906 t twenty seconds later.
+     *
+     * Applied only to fields the journal also reports. Cargo, market, orders,
+     * shipyard, outfitting, services and the itinerary have no journal
+     * equivalent, so they are still applied unconditionally further down --
+     * holding those back would lose data rather than protect it.
+     */
+    $journalFresh = fc_journal_fresh($carrier, $ts);
+
+    if ($callsign !== null && !$journalFresh) {
         $fields['callsign'] = $callsign;
     }
     $name = fc_capi_name($data['name']['vanityName'] ?? null);
-    if ($name !== null) {
+    if ($name !== null && !$journalFresh) {
         $fields['name'] = $name;
         $fields['name_at'] = $ts;
     }
 
-    // The journal is the better source of position -- it is written the moment
-    // the carrier arrives, while this is whatever the last CAPI query saw. Only
-    // fill it in when it is genuinely newer.
+    // Position: the journal is written the moment the carrier arrives, while
+    // this is whatever the last CAPI query saw.
     //
     // Note what `location_at` then means: when we last *heard* the position,
     // not when the carrier got there. It is a staleness guard, not an arrival
     // time. Anything wanting the latter reads the open itinerary stop.
-    if (isset($data['currentStarSystem']) && !fc_stale($carrier, 'location_at', $ts)) {
+    if (isset($data['currentStarSystem']) && !$journalFresh && !fc_stale($carrier, 'location_at', $ts)) {
         $fields['system'] = (string) $data['currentStarSystem'];
         $fields['location_at'] = $ts;
     }
 
-    foreach ([
-        'fuel_level' => 'fuel',
-        'state' => 'state',
-        'theme' => 'theme',
-        'docking_access' => 'dockingAccess',
-    ] as $column => $key) {
+    // state and theme have no journal equivalent, so they are never contested.
+    foreach (['state' => 'state', 'theme' => 'theme'] as $column => $key) {
         if (isset($data[$key])) {
-            $fields[$column] = $column === 'fuel_level' ? (int) $data[$key] : (string) $data[$key];
+            $fields[$column] = (string) $data[$key];
         }
     }
-    if (isset($data['notoriousAccess'])) {
+
+    // Everything below here is also reported by CarrierStats, so it defers.
+    // Note fuel_at and stats_at are deliberately not stamped anywhere in this
+    // function: stamping them from CAPI would make each sync suppress the next
+    // one, and freeze these values outright for accounts with no journal.
+    if (isset($data['dockingAccess']) && !$journalFresh) {
+        $fields['docking_access'] = (string) $data['dockingAccess'];
+    }
+    if (isset($data['fuel']) && !$journalFresh) {
+        $fields['fuel_level'] = (int) $data['fuel'];
+    }
+    if (isset($data['notoriousAccess']) && !$journalFresh) {
         $fields['allow_notorious'] = (int) (bool) $data['notoriousAccess'];
         $fields['docking_at'] = $ts;
     }
 
-    if ($finance !== []) {
+    if ($finance !== [] && !$journalFresh) {
         foreach ([
             'balance' => 'balance',
             'taxation' => 'taxation',
