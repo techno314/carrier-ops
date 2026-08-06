@@ -388,21 +388,33 @@ function fc_squadron_apply_capacity(int $carrierId, array $carrier, array $sc, s
         return;
     }
 
+    // The hold is two lines, not one, and reading only the first is wrong in
+    // the ordinary case rather than an edge one. A carrier that lists nothing
+    // on its market reports cargoForSale 0 with the entire hold under
+    // cargoNotForSale -- checked against a real payload carrying 15,504 t,
+    // every tonne of it in the second line. Taking the first alone described
+    // that carrier as empty.
     static $columns = [
-        'space_shippacks' => 'shipPacks',
-        'space_modulepacks' => 'modulePacks',
-        'space_cargo' => 'cargoForSale',
-        'space_reserved' => 'cargoSpaceReserved',
-        'space_crew' => 'crew',
-        'space_free' => 'freeSpace',
+        'space_shippacks' => ['shipPacks'],
+        'space_modulepacks' => ['modulePacks'],
+        'space_cargo' => ['cargoForSale', 'cargoNotForSale'],
+        'space_reserved' => ['cargoSpaceReserved'],
+        'space_crew' => ['crew'],
+        'space_free' => ['freeSpace'],
     ];
 
     $fields = [];
     $total = 0;
-    foreach ($columns as $column => $key) {
-        if (isset($capacity[$key]) && is_numeric($capacity[$key])) {
-            $fields[$column] = (int) $capacity[$key];
-            $total += (int) $capacity[$key];
+    foreach ($columns as $column => $keys) {
+        $value = null;
+        foreach ($keys as $key) {
+            if (isset($capacity[$key]) && is_numeric($capacity[$key])) {
+                $value = (int) $value + (int) $capacity[$key];
+            }
+        }
+        if ($value !== null) {
+            $fields[$column] = $value;
+            $total += $value;
         }
     }
     if ($fields === []) {
