@@ -815,13 +815,41 @@ function fc_ev_cargo_transfer(array $carrier, array $event, ?string $ts): bool
     $fields = ['cargo_journal_at' => $ts];
 
     // The summary has to move with the manifest, or the board shows a hold
-    // whose contents disagree with its own total. Clamped at both ends: the
-    // free space cannot go negative, and cannot exceed a capacity we may not
-    // know yet.
-    if ($carrier['space_cargo'] !== null) {
+    // whose contents disagree with its own total.
+    //
+    // Summed rather than adjusted, wherever the manifest exists to sum. The
+    // two are the same quantity, but they age differently: space_cargo was
+    // last written by CarrierStats, which is only produced when somebody opens
+    // the management screen, so adding a delta to it carries however stale a
+    // base that was forward for ever. It did, immediately -- the first real
+    // transfer landed on a summary 1,230 t out of date and stayed 1,230 t out.
+    // The manifest came from the last sync and has just had this same delta
+    // applied, so summing it is both current and self-consistent.
+    if ($carrier['cargo_at'] !== null) {
+        $row = fc_one('SELECT COALESCE(SUM(qty), 0) AS t FROM fc_cargo WHERE carrier_id = :i', ['i' => $id]);
+        $fields['space_cargo'] = (int) ($row['t'] ?? 0);
+    } elseif ($carrier['space_cargo'] !== null) {
+        // No sync has ever filled the manifest, so arithmetic is all there is.
         $fields['space_cargo'] = max(0, (int) $carrier['space_cargo'] + $net);
     }
-    if ($carrier['space_free'] !== null) {
+
+    // Free space is the hull minus everything not free. Derived the same way
+    // and for the same reason, falling back to arithmetic when some part of
+    // the hull is still unknown. Clamped at both ends regardless: it cannot go
+    // negative, nor exceed a capacity we may not know yet.
+    $others = 0;
+    $derivable = $carrier['capacity'] !== null && isset($fields['space_cargo']);
+    foreach (['space_crew', 'space_reserved', 'space_shippacks', 'space_modulepacks'] as $column) {
+        if ($carrier[$column] === null) {
+            $derivable = false;
+            break;
+        }
+        $others += (int) $carrier[$column];
+    }
+
+    if ($derivable) {
+        $fields['space_free'] = max(0, (int) $carrier['capacity'] - $others - $fields['space_cargo']);
+    } elseif ($carrier['space_free'] !== null) {
         $free = (int) $carrier['space_free'] - $net;
         if ($carrier['capacity'] !== null) {
             $free = min($free, (int) $carrier['capacity']);
