@@ -442,6 +442,54 @@ case 'colony_invite':
             . 'Only the hash is stored, so copy it now — it cannot be shown again.',
     ]);
 
+/*
+ * Which Colony Planner this board has, so a copy can tell whether it is old.
+ *
+ * Takes an account key or a build token -- the same two credentials the colony
+ * routes take, and between them everybody who could legitimately be running a
+ * planner. It was briefly open on the grounds that a version number and a
+ * download link are not secret, which is true and beside the point: this board
+ * does not have unauthenticated endpoints, and every request here opens a zip
+ * and runs a regex over it, which is real work an anonymous caller could ask
+ * for repeatedly.
+ *
+ * Somebody with no credential at all is not stuck: the download page is public,
+ * exactly like the EDMC plugin's, so a first install needs nothing. What a key
+ * buys is the planner noticing on its own.
+ *
+ * The version is read out of the file rather than recorded somewhere separate,
+ * so publishing a new planner is copying one zip in. Two places to change is
+ * one place to forget.
+ */
+case 'planner':
+    fc_api_colony_caller();
+    $zip = FC_ROOT . '/assets/colony-planner.zip';
+    if (!is_file($zip)) {
+        fc_json(404, ['error' => 'This board does not host the planner.']);
+    }
+
+    $version = null;
+    $archive = new ZipArchive();
+    if ($archive->open($zip) === true) {
+        $source = $archive->getFromName('colony_planner.py');
+        $archive->close();
+        if (is_string($source) && preg_match('/^VERSION\s*=\s*"([^"]+)"/m', $source, $found)) {
+            $version = $found[1];
+        }
+    }
+    if ($version === null) {
+        fc_json(500, ['error' => 'The planner archive has no readable version.']);
+    }
+
+    fc_json(200, [
+        'version' => $version,
+        // Versioned by mtime for the same reason the plugin download is:
+        // Cloudflare caches by URL, and a rebuilt zip under the same name would
+        // go on being served from the edge long after it changed.
+        'url' => '/fc/assets/colony-planner.zip?v=' . (int) filemtime($zip),
+        'size' => (int) filesize($zip),
+    ]);
+
 case 'carriers':
     $query = trim((string) ($_GET['q'] ?? ''));
     if ($query !== '') {
@@ -471,6 +519,6 @@ case 'carriers':
 default:
     fc_json(400, [
         'error' => 'Unknown action.',
-        'actions' => ['ingest', 'carrier', 'carriers', 'colony', 'colony_report', 'colony_invite', 'me'],
+        'actions' => ['ingest', 'carrier', 'carriers', 'colony', 'colony_report', 'colony_invite', 'planner', 'me'],
     ]);
 }

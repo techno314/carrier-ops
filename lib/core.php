@@ -1389,6 +1389,7 @@ function fc_head(string $title, string $active = ''): void
         '' => ['Dashboard', fc_url()],
         'search' => ['Carriers', fc_url('search.php')],
         'upload' => ['Upload', fc_url('upload.php')],
+        'planner' => ['Planner', fc_url('planner.php')],
         'settings' => ['Settings', fc_url('settings.php')],
     ];
     ?><!DOCTYPE html>
