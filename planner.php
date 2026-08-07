@@ -111,9 +111,9 @@ fc_head('Colony Planner', 'planner');
       restarts. Nothing else is required, and nothing is shown while you are current.
     </p>
     <p class="small dim" style="margin-bottom:0">
-      Noticing on its own needs a key or a build token — the same credential the rest of the planner
-      uses. Without one it still works entirely from your own journal; it simply will not tell you when
-      a newer version is here, and this page is where to get it.
+      The check is <code><?= fc_e(fc_url('api.php?action=planner')) ?></code> and needs no key. The
+      planner works entirely from your own journal without one — a key is only for the carrier hold and
+      for sharing a build — so requiring it here would mean solo users never hearing about a new version.
     </p>
   </div>
 </main>

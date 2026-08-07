@@ -445,40 +445,59 @@ case 'colony_invite':
 /*
  * Which Colony Planner this board has, so a copy can tell whether it is old.
  *
- * Takes an account key or a build token -- the same two credentials the colony
- * routes take, and between them everybody who could legitimately be running a
- * planner. It was briefly open on the grounds that a version number and a
- * download link are not secret, which is true and beside the point: this board
- * does not have unauthenticated endpoints, and every request here opens a zip
- * and runs a regex over it, which is real work an anonymous caller could ask
- * for repeatedly.
+ * No credential, deliberately, and it is the one endpoint here that should not
+ * want one. The planner works entirely from a commander's own journal with no
+ * key at all -- the key is only for the carrier hold and for sharing a build --
+ * so gating this would mean every solo user silently never learning that a new
+ * version exists. A planner whose key was wrong could not update itself back
+ * into working order either.
  *
- * Somebody with no credential at all is not stuck: the download page is public,
- * exactly like the EDMC plugin's, so a first install needs nothing. What a key
- * buys is the planner noticing on its own.
+ * It gives away a version string and a path to a zip that nginx already serves
+ * to anyone, exactly as the EDMC plugin's download is served. There is nothing
+ * here to protect.
+ *
+ * The cost of being open is answered rather than accepted: the parsed version is
+ * cached against the archive's mtime, so a request opens the zip only when the
+ * planner has actually been republished. Everything after that is one small
+ * read.
  *
  * The version is read out of the file rather than recorded somewhere separate,
  * so publishing a new planner is copying one zip in. Two places to change is
  * one place to forget.
  */
 case 'planner':
-    fc_api_colony_caller();
     $zip = FC_ROOT . '/assets/colony-planner.zip';
     if (!is_file($zip)) {
         fc_json(404, ['error' => 'This board does not host the planner.']);
     }
 
-    $version = null;
-    $archive = new ZipArchive();
-    if ($archive->open($zip) === true) {
-        $source = $archive->getFromName('colony_planner.py');
-        $archive->close();
-        if (is_string($source) && preg_match('/^VERSION\s*=\s*"([^"]+)"/m', $source, $found)) {
-            $version = $found[1];
+    $stamp = (int) filemtime($zip);
+    $cached = fc_one("SELECT v FROM fc_meta WHERE k = 'planner_version'")['v'] ?? '';
+    [$cachedStamp, $cachedVersion] = array_pad(explode(':', (string) $cached, 2), 2, '');
+
+    if ((string) $stamp === $cachedStamp && $cachedVersion !== '') {
+        $version = $cachedVersion;
+    } else {
+        // Only when the archive has actually changed. The zip is the one source
+        // of truth for what version this board has; this just avoids re-reading
+        // it for every caller in between publications.
+        $version = null;
+        $archive = new ZipArchive();
+        if ($archive->open($zip) === true) {
+            $source = $archive->getFromName('colony_planner.py');
+            $archive->close();
+            if (is_string($source) && preg_match('/^VERSION\s*=\s*"([^"]+)"/m', $source, $found)) {
+                $version = $found[1];
+            }
         }
-    }
-    if ($version === null) {
-        fc_json(500, ['error' => 'The planner archive has no readable version.']);
+        if ($version === null) {
+            fc_json(500, ['error' => 'The planner archive has no readable version.']);
+        }
+        fc_exec(
+            "INSERT INTO fc_meta (k, v) VALUES ('planner_version', :v)
+             ON DUPLICATE KEY UPDATE v = VALUES(v)",
+            ['v' => $stamp . ':' . $version],
+        );
     }
 
     fc_json(200, [
