@@ -341,6 +341,15 @@ function fc_colony_apply_report(string $hauler, array $data): array
     // order their machines happen to send them, and "most recent wins" is the
     // only rule that survives that.
     if ($needs !== [] && $readAt !== null && strcmp($readAt, (string) $existing['read_at']) >= 0) {
+        // Wrapped for the same reason as the stock below, and it matters more
+        // here: this delete empties the manifest for every hauler at once, not
+        // just one person's share of it.
+        $db = fc_db();
+        $ownsManifest = !$db->inTransaction();
+        if ($ownsManifest) {
+            $db->beginTransaction();
+        }
+
         fc_exec('DELETE FROM fc_colony_needs WHERE market_id = :id', ['id' => $marketId]);
         $stmt = fc_db()->prepare(
             'INSERT INTO fc_colony_needs (market_id, commodity, loc_name, required, provided, payment)
@@ -382,6 +391,12 @@ function fc_colony_apply_report(string $hauler, array $data): array
                 'id' => $marketId,
             ],
         );
+
+        // The site row is committed with its manifest, so progress and the
+        // requirements it describes can never disagree in what a reader sees.
+        if ($ownsManifest) {
+            $db->commit();
+        }
     }
 
     // Who is hauling, and in what. Always applied: this is the reporter's own
@@ -412,38 +427,66 @@ function fc_colony_apply_report(string $hauler, array $data): array
     $stock = is_array($data['stock'] ?? null) ? $data['stock'] : [];
     $stocked = 0;
 
-    // Replaced wholesale rather than merged. The planner sends its entire
-    // position each time, so a commodity missing from the report is one the
-    // reporter no longer has -- merging would leave it there for ever.
-    fc_exec(
-        'DELETE FROM fc_colony_stock WHERE market_id = :m AND hauler = :u',
-        ['m' => $marketId, 'u' => $hauler],
-    );
-    if ($stock !== []) {
-        $stmt = fc_db()->prepare(
-            'INSERT INTO fc_colony_stock (market_id, hauler, commodity, in_ship, on_carrier, delivered)
-             VALUES (:m, :u, :c, :s, :car, :d)
-             ON DUPLICATE KEY UPDATE in_ship = VALUES(in_ship),
-                                     on_carrier = VALUES(on_carrier),
-                                     delivered = VALUES(delivered)'
+    /*
+     * Replaced wholesale rather than merged. The planner sends its entire
+     * position each time, so a commodity missing from the report is one the
+     * reporter no longer has -- merging would leave it there for ever.
+     *
+     * In a transaction, because "replace" is a delete and then some inserts,
+     * and without one those commit separately. Everybody else on the build is
+     * reading this table every couple of seconds, and in the gap between the
+     * two this hauler holds nothing at all -- which is precisely what was seen:
+     * `Others have` emptying for about half a second and coming back.
+     *
+     * It is a small window and it does not matter how often it is hit, only
+     * that a reader can land in it. Four people reporting every two seconds
+     * land in it regularly.
+     */
+    $db = fc_db();
+    $owned = !$db->inTransaction();
+    if ($owned) {
+        $db->beginTransaction();
+    }
+
+    try {
+        fc_exec(
+            'DELETE FROM fc_colony_stock WHERE market_id = :m AND hauler = :u',
+            ['m' => $marketId, 'u' => $hauler],
         );
-        foreach ($stock as $row) {
-            if (!is_array($row)) {
-                continue;
+        if ($stock !== []) {
+            $stmt = $db->prepare(
+                'INSERT INTO fc_colony_stock (market_id, hauler, commodity, in_ship, on_carrier, delivered)
+                 VALUES (:m, :u, :c, :s, :car, :d)
+                 ON DUPLICATE KEY UPDATE in_ship = VALUES(in_ship),
+                                         on_carrier = VALUES(on_carrier),
+                                         delivered = VALUES(delivered)'
+            );
+            foreach ($stock as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $commodity = fc_clean_symbol($row['commodity'] ?? null);
+                $ship = (int) ($row['ship'] ?? 0);
+                $carrier = (int) ($row['carrier'] ?? 0);
+                $delivered = (int) ($row['delivered'] ?? 0);
+                if ($commodity === '' || ($ship <= 0 && $carrier <= 0 && $delivered <= 0)) {
+                    continue;
+                }
+                $stmt->execute([
+                    'm' => $marketId, 'u' => $hauler, 'c' => mb_substr($commodity, 0, 64),
+                    's' => max(0, $ship), 'car' => max(0, $carrier), 'd' => max(0, $delivered),
+                ]);
+                $stocked++;
             }
-            $commodity = fc_clean_symbol($row['commodity'] ?? null);
-            $ship = (int) ($row['ship'] ?? 0);
-            $carrier = (int) ($row['carrier'] ?? 0);
-            $delivered = (int) ($row['delivered'] ?? 0);
-            if ($commodity === '' || ($ship <= 0 && $carrier <= 0 && $delivered <= 0)) {
-                continue;
-            }
-            $stmt->execute([
-                'm' => $marketId, 'u' => $hauler, 'c' => mb_substr($commodity, 0, 64),
-                's' => max(0, $ship), 'car' => max(0, $carrier), 'd' => max(0, $delivered),
-            ]);
-            $stocked++;
         }
+        if ($owned) {
+            $db->commit();
+        }
+    } catch (Throwable $e) {
+        if ($owned) {
+            $db->rollBack();
+        }
+        throw $e;
     }
 
     return [
