@@ -14,7 +14,13 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
     exit;
 }
 
-const FC_SCHEMA_VERSION = 18;
+// 20, not 19: the version reached 19 on a live docroot in the moment between
+// the colony tables being redefined and fc_drop_superseded_tables being written
+// to rebuild them. The sentinel then said the work was done and the old shape
+// survived. A version is only a claim that a migration ran, never that it ran
+// completely -- which is why every step here detects its own work rather than
+// trusting this number.
+const FC_SCHEMA_VERSION = 21;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -55,6 +61,10 @@ function fc_sentinel_paths(): array
 function fc_migrate(): void
 {
     $db = fc_db();
+    // Before the CREATEs, not after them like fc_drop_tables: a table that has
+    // to be rebuilt must be gone by the time its CREATE runs, or the statement
+    // does nothing and the old shape survives.
+    fc_drop_superseded_tables();
     foreach (fc_schema_statements() as $sql) {
         $db->exec($sql);
     }
@@ -315,6 +325,59 @@ function fc_migrate_capi_tokens(): void
  * Separate from fc_drop_columns because dropping a table is the more final of
  * the two and deserves to be read on its own.
  */
+/**
+ * Rebuild a table whose shape changed, rather than alter it column by column.
+ *
+ * Only ever for tables that are pure cache -- rows that something else can
+ * produce again. The colony tables qualify: every planner posts its whole
+ * position every fifteen seconds, so an emptied table refills within one tick
+ * of anyone who is hauling, and the site manifest comes back the moment
+ * somebody docks. Dropping a table with data nobody can regenerate would be a
+ * different matter entirely.
+ *
+ * Detected on the old column rather than on the schema version, so a database
+ * that never had the old shape is left alone and one that did converges even
+ * if the version marker was lost.
+ */
+function fc_drop_superseded_tables(): void
+{
+    $db = fc_db();
+
+    // fc_colony_haulers and fc_colony_stock keyed participants on user_id,
+    // which assumed everyone hauling had an account here. They are keyed on a
+    // `hauler` string now, so that a token minted for one build can take part
+    // without one.
+    foreach (['fc_colony_haulers', 'fc_colony_stock'] as $table) {
+        $stmt = $db->prepare(
+            'SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c'
+        );
+        $stmt->execute(['t' => $table, 'c' => 'user_id']);
+        if ((int) ($stmt->fetch()['n'] ?? 0) > 0) {
+            $db->exec("DROP TABLE IF EXISTS `{$table}`");
+        }
+    }
+
+    // fc_colony_sites.read_by took the same widening, but this one is altered
+    // rather than rebuilt: unlike the two above it holds the site manifest,
+    // which only comes back when somebody docks at the depot. Throwing that
+    // away to change one column would cost everybody on the build their
+    // requirements until one of them next flew there.
+    //
+    // A changed type is invisible to CREATE TABLE IF NOT EXISTS and to
+    // fc_ensure_columns, which only ever adds what is missing -- so it is asked
+    // for by name here.
+    $stmt = $db->prepare(
+        'SELECT DATA_TYPE FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c'
+    );
+    $stmt->execute(['t' => 'fc_colony_sites', 'c' => 'read_by']);
+    $type = strtolower((string) ($stmt->fetch()['DATA_TYPE'] ?? ''));
+    if ($type !== '' && $type !== 'varchar') {
+        $db->exec('ALTER TABLE fc_colony_sites MODIFY read_by VARCHAR(24) NULL');
+    }
+}
+
 function fc_drop_tables(): void
 {
     // fc_email_tokens: email verification was replaced by Frontier auth.
@@ -747,7 +810,7 @@ function fc_schema_statements(): array
             -- was written: readings arrive out of order from several people and
             -- an older one must never overwrite a newer.
             read_at DATETIME NOT NULL,
-            read_by INT UNSIGNED NULL,
+            read_by VARCHAR(24) NULL,
             created_at DATETIME NOT NULL,
             KEY fc_colony_sites_name (name),
             KEY fc_colony_sites_system (system)
@@ -766,14 +829,18 @@ function fc_schema_statements(): array
         /* One row per person per build: who they are and what they haul in. */
         "CREATE TABLE IF NOT EXISTS fc_colony_haulers (
             market_id BIGINT UNSIGNED NOT NULL,
-            user_id INT UNSIGNED NOT NULL,
+            -- Who this is, in a space that covers both kinds of participant:
+            -- `u12` for an account on this board, `t7` for somebody holding a
+            -- token minted for this build alone. A hauler on a colonisation
+            -- run is very often somebody who has never heard of the board and
+            -- is not about to register to move some steel.
+            hauler VARCHAR(24) NOT NULL,
             cmdr VARCHAR(64) NULL,
             carrier VARCHAR(16) NULL,
             ship VARCHAR(64) NULL,
             cargo_capacity INT NULL,
             updated_at DATETIME NOT NULL,
-            PRIMARY KEY (market_id, user_id),
-            KEY fc_colony_haulers_user (user_id)
+            PRIMARY KEY (market_id, hauler)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         /*
@@ -785,12 +852,37 @@ function fc_schema_statements(): array
          */
         "CREATE TABLE IF NOT EXISTS fc_colony_stock (
             market_id BIGINT UNSIGNED NOT NULL,
-            user_id INT UNSIGNED NOT NULL,
+            hauler VARCHAR(24) NOT NULL,
             commodity VARCHAR(64) NOT NULL,
             in_ship INT NOT NULL DEFAULT 0,
             on_carrier INT NOT NULL DEFAULT 0,
             delivered INT NOT NULL DEFAULT 0,
-            PRIMARY KEY (market_id, user_id, commodity)
+            PRIMARY KEY (market_id, hauler, commodity)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+
+        /*
+         * An invitation to one build, and nothing else on this board.
+         *
+         * Requiring an account was the wrong shape. The people hauling to a
+         * colonisation site are a scratch crew assembled for a fortnight, most
+         * of whom have never heard of this board and will not register to move
+         * some steel. A token names one construction site, works only for that
+         * site's two routes, and can be handed over in a Discord message.
+         *
+         * Hashed like an account key: what is stored cannot be used, so a
+         * database that leaks does not hand out the builds with it.
+         */
+        "CREATE TABLE IF NOT EXISTS fc_colony_tokens (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            market_id BIGINT UNSIGNED NOT NULL,
+            token_hash CHAR(64) NOT NULL,
+            label VARCHAR(64) NULL,
+            created_by VARCHAR(24) NOT NULL,
+            created_at DATETIME NOT NULL,
+            last_used_at DATETIME NULL,
+            revoked_at DATETIME NULL,
+            UNIQUE KEY fc_colony_tokens_hash (token_hash),
+            KEY fc_colony_tokens_site (market_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
     ];
 }

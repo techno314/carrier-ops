@@ -33,6 +33,22 @@ function fc_api_user(): ?array
     return fc_user();
 }
 
+/**
+ * The caller of a colony route, which may not be an account at all.
+ *
+ * Answers 401 rather than returning null: every colony route needs one, and
+ * three copies of the same check would be three chances to forget it.
+ */
+function fc_api_colony_caller(): array
+{
+    $key = (string) ($_SERVER['HTTP_X_API_KEY'] ?? ($_GET['key'] ?? ''));
+    $caller = fc_colony_caller($key, fc_api_user());
+    if ($caller === null) {
+        fc_json(401, ['error' => 'Provide an account key, or a build token, in X-API-Key.']);
+    }
+    return $caller;
+}
+
 function fc_api_require_user(): array
 {
     $user = fc_api_user();
@@ -317,7 +333,7 @@ case 'carrier':
  * up to is the group's business, and the group is whoever has an account here.
  */
 case 'colony_report':
-    $user = fc_api_require_user();
+    $caller = fc_api_colony_caller();
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         fc_json(405, ['error' => 'POST a report to this one.']);
     }
@@ -328,7 +344,16 @@ case 'colony_report':
         fc_json(400, ['error' => 'Send a JSON object describing what you can see.']);
     }
 
-    $result = fc_colony_apply_report($user, $data);
+    // A build token may only speak about its own build. An account key may
+    // report to any of them, which is what the planner uses when the person
+    // running it happens to have a login here.
+    if ($caller['market_id'] !== null
+        && (int) ($data['marketId'] ?? 0) !== $caller['market_id']
+    ) {
+        fc_json(403, ['error' => 'That token is for a different construction site.']);
+    }
+
+    $result = fc_colony_apply_report($caller['hauler'], $data);
     if (!$result['ok']) {
         fc_json(400, ['error' => $result['note'] ?? 'The report could not be applied.']);
     }
@@ -342,8 +367,13 @@ case 'colony_report':
     ] + ($site === null ? [] : fc_colony_view($site)));
 
 case 'colony':
-    fc_api_require_user();
+    $caller = fc_api_colony_caller();
     $query = trim((string) ($_GET['site'] ?? $_GET['id'] ?? ''));
+    // A token knows which build it is for, so it needs no argument -- and
+    // giving it one that points somewhere else must not work.
+    if ($caller['market_id'] !== null) {
+        $query = (string) $caller['market_id'];
+    }
     if ($query === '') {
         fc_json(400, ['error' => 'Pass site= with a construction site name, or id= with its MarketID.']);
     }
@@ -367,6 +397,36 @@ case 'colony':
     }
 
     fc_json(200, fc_colony_view($matches[0]));
+
+case 'colony_invite':
+    $caller = fc_api_colony_caller();
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        fc_json(405, ['error' => 'POST to this one.']);
+    }
+
+    $marketId = $caller['market_id'] ?? (int) ($_POST['marketId'] ?? ($_GET['marketId'] ?? 0));
+    if ($marketId <= 0) {
+        fc_json(400, ['error' => 'Pass marketId= for the build you are inviting somebody to.']);
+    }
+    if (fc_colony_site($marketId) === null) {
+        fc_json(404, ['error' => 'No such build. Report it once before inviting anyone to it.']);
+    }
+    // Only somebody already hauling to a build may invite others to it. That is
+    // the whole membership rule: there is no owner, because a colonisation crew
+    // does not have one, and anybody who has done a run has as much standing as
+    // whoever started it.
+    if (!fc_colony_participates($marketId, $caller['hauler'])) {
+        fc_json(403, ['error' => 'Report to this build once before inviting anybody to it.']);
+    }
+
+    $minted = fc_colony_mint_token($marketId, $caller['hauler'], $_GET['label'] ?? null);
+    fc_json(200, [
+        'token' => $minted['token'],
+        'marketId' => (string) $marketId,
+        // Said plainly, because it is the one thing about this that surprises
+        // people: there is no way to look it up again.
+        'note' => 'Only the hash is stored. Copy it now — it cannot be shown again.',
+    ]);
 
 case 'carriers':
     $query = trim((string) ($_GET['q'] ?? ''));
@@ -397,6 +457,6 @@ case 'carriers':
 default:
     fc_json(400, [
         'error' => 'Unknown action.',
-        'actions' => ['ingest', 'carrier', 'carriers', 'colony', 'colony_report', 'me'],
+        'actions' => ['ingest', 'carrier', 'carriers', 'colony', 'colony_report', 'colony_invite', 'me'],
     ]);
 }

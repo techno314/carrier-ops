@@ -182,6 +182,11 @@ curl -X POST "https://grayflare.space/fc/api.php?action=colony_report"   -H "X-A
 `action=carrier` takes either a CarrierID or a callsign. Finance, upkeep and cargo appear only when
 the key owns the carrier.
 
+`action=colony_invite` mints a token for one build, which anybody already hauling to it may do.
+Such a token goes in `X-API-Key` like an account key, works on that build's two routes and nothing
+else on the board, and is stored only as a hash — the point being that a hauler who turned up for a
+fortnight should not have to register an account to help.
+
 `action=colony` looks a build up by the name people say out loud, and returns what the site wants
 against what the group is holding, split by person. Both colony routes want a key: a build's shopping
 list is the group's business rather than the public's. Reports are additive — each key contributes
