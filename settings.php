@@ -318,9 +318,23 @@ fc_head('Settings', 'settings');
     <?php endif; ?>
 
     <p class="muted small">
-      A key lets a script post journal data without signing in. It can upload and read your own carriers, nothing else.
+      A key lets a program act as you without signing in.
       <?= $user['api_key_hash'] === null ? 'You do not have one.' : 'A key is active.' ?>
-      The <a href="<?= fc_e(fc_url('plugin.php')) ?>">EDMC plugin</a> uses one to keep the board current by itself.
+      The <a href="<?= fc_e(fc_url('plugin.php')) ?>">EDMC plugin</a> uses one to keep the board current by itself,
+      and the <a href="<?= fc_e(fc_url('planner.php')) ?>">Colony Planner</a> uses one to read your carrier's hold
+      and to share a build with the people hauling to it.
+    </p>
+
+    <p class="muted small">
+      It can upload journals, read the carriers you own, and take part in colonisation builds — which includes
+      <strong>creating invitations</strong> that let other people join a build without an account here. Treat it as
+      you would a password: anyone holding it can do those things as you, and revoking is the only way to stop them.
+    </p>
+
+    <p class="small dim">
+      It cannot read another account's carriers, change your password, or sign in to this site.
+      An invitation it creates is limited to one star system's build and expires only when revoked —
+      see <a href="<?= fc_e(fc_url('planner.php')) ?>">the planner page</a>.
     </p>
 
     <h3>Posting data</h3>

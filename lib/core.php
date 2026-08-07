@@ -1392,6 +1392,18 @@ function fc_head(string $title, string $active = ''): void
         'planner' => ['Planner', fc_url('planner.php')],
         'settings' => ['Settings', fc_url('settings.php')],
     ];
+
+    /*
+     * Nav entries a signed-out visitor still sees.
+     *
+     * Everything else here is about a carrier somebody owns and is useless
+     * without an account, so it is hidden rather than offered and then refused.
+     * The planner is not: it is a download that works entirely from a
+     * commander's own journal, and somebody arriving to fetch it has no reason
+     * to sign in first -- or any way to guess the page exists if it only
+     * appears once they have.
+     */
+    $public = ['', 'planner'];
     ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1423,7 +1435,7 @@ function fc_head(string $title, string $active = ''): void
   </a>
   <nav>
     <?php foreach ($nav as $key => [$label, $href]): ?>
-      <?php if ($key !== '' && $user === null) { continue; } ?>
+      <?php if ($user === null && !in_array($key, $public, true)) { continue; } ?>
       <a href="<?= fc_e($href) ?>"<?= $key === $active ? ' class="on"' : '' ?>><?= fc_e($label) ?></a>
     <?php endforeach; ?>
   </nav>
