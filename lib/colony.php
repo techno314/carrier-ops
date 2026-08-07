@@ -44,7 +44,7 @@ const FC_COLONY_TOKEN_PREFIX = 'fcb_';
  * hauling to a colony are a scratch crew assembled for a fortnight and will not
  * register an account to move some steel.
  *
- * @return array{hauler:string,market_id:?int,user:?array}|null
+ * @return array{hauler:string,system:?string,user:?array}|null
  */
 function fc_colony_caller(string $key, ?array $user): ?array
 {
@@ -62,32 +62,33 @@ function fc_colony_caller(string $key, ?array $user): ?array
                 ['id' => $row['id']]);
         return [
             'hauler' => 't' . $row['id'],
-            'market_id' => (int) $row['market_id'],
+            'system' => (string) $row['system'],
             'user' => null,
         ];
     }
 
     if ($user !== null) {
-        return ['hauler' => 'u' . $user['id'], 'market_id' => null, 'user' => $user];
+        return ['hauler' => 'u' . $user['id'], 'system' => null, 'user' => $user];
     }
     return null;
 }
 
 /**
- * Mint an invitation to one build.
+ * Mint an invitation to a colony.
  *
  * Returned once and never again: only its hash is kept, so a lost token is
  * replaced rather than looked up.
  *
  * @return array{token:string,id:int}
  */
-function fc_colony_mint_token(int $marketId, string $hauler, ?string $label): array
+function fc_colony_mint_token(string $system, ?int $marketId, string $hauler, ?string $label): array
 {
     $token = FC_COLONY_TOKEN_PREFIX . bin2hex(random_bytes(18));
     fc_exec(
-        'INSERT INTO fc_colony_tokens (market_id, token_hash, label, created_by, created_at)
-         VALUES (:m, :h, :l, :c, UTC_TIMESTAMP())',
+        'INSERT INTO fc_colony_tokens (system, market_id, token_hash, label, created_by, created_at)
+         VALUES (:sys, :m, :h, :l, :c, UTC_TIMESTAMP())',
         [
+            'sys' => mb_substr($system, 0, 128),
             'm' => $marketId,
             'h' => hash('sha256', $token),
             'l' => $label === null || trim($label) === '' ? null : mb_substr(trim($label), 0, 64),
@@ -97,13 +98,32 @@ function fc_colony_mint_token(int $marketId, string $hauler, ?string $label): ar
     return ['token' => $token, 'id' => (int) fc_db()->lastInsertId()];
 }
 
-/** Is this caller already part of this build? Only they may invite others. */
-function fc_colony_participates(int $marketId, string $hauler): bool
+/**
+ * Is this caller already hauling somewhere in this system?
+ *
+ * Asked of the system rather than of one site, to match what a token grants.
+ * Somebody who has done a run to the colonisation ship has as much standing to
+ * invite people to the orbital site next door as to the one they flew to.
+ */
+function fc_colony_participates(string $system, string $hauler): bool
 {
     return fc_one(
-        'SELECT 1 AS y FROM fc_colony_haulers WHERE market_id = :m AND hauler = :h',
-        ['m' => $marketId, 'h' => $hauler],
+        'SELECT 1 AS y
+           FROM fc_colony_haulers h
+           JOIN fc_colony_sites s ON s.market_id = h.market_id
+          WHERE s.system = :sys AND h.hauler = :h
+          LIMIT 1',
+        ['sys' => $system, 'h' => $hauler],
     ) !== null;
+}
+
+/** Every build in a system, most recently read first. @return array<int,array> */
+function fc_colony_sites_in(string $system): array
+{
+    return fc_all(
+        'SELECT * FROM fc_colony_sites WHERE system = :sys ORDER BY read_at DESC',
+        ['sys' => $system],
+    );
 }
 
 /** A build by its MarketID. */

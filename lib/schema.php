@@ -20,7 +20,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
 // survived. A version is only a claim that a migration ran, never that it ran
 // completely -- which is why every step here detects its own work rather than
 // trusting this number.
-const FC_SCHEMA_VERSION = 21;
+const FC_SCHEMA_VERSION = 22;
 
 /**
  * Ensure the schema is current, cheaply.
@@ -356,6 +356,25 @@ function fc_drop_superseded_tables(): void
         if ((int) ($stmt->fetch()['n'] ?? 0) > 0) {
             $db->exec("DROP TABLE IF EXISTS `{$table}`");
         }
+    }
+
+    // fc_colony_tokens was scoped to a single construction site before it was
+    // scoped to the system containing them. Rebuilt rather than altered: a
+    // token's whole value is what it grants, and quietly widening the ones
+    // already issued would be a worse answer than making people mint again.
+    $stmt = $db->prepare(
+        'SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c'
+    );
+    $stmt->execute(['t' => 'fc_colony_tokens', 'c' => 'system']);
+    $stmt2 = $db->prepare(
+        'SELECT COUNT(*) AS n FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t'
+    );
+    $stmt2->execute(['t' => 'fc_colony_tokens']);
+    $exists = (int) ($stmt2->fetch()['n'] ?? 0) > 0;
+    if ($exists && (int) ($stmt->fetch()['n'] ?? 0) === 0) {
+        $db->exec('DROP TABLE IF EXISTS `fc_colony_tokens`');
     }
 
     // fc_colony_sites.read_by took the same widening, but this one is altered
@@ -861,20 +880,29 @@ function fc_schema_statements(): array
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
 
         /*
-         * An invitation to one build, and nothing else on this board.
+         * An invitation to one colony, and nothing else on this board.
          *
          * Requiring an account was the wrong shape. The people hauling to a
          * colonisation site are a scratch crew assembled for a fortnight, most
          * of whom have never heard of this board and will not register to move
-         * some steel. A token names one construction site, works only for that
-         * site's two routes, and can be handed over in a Discord message.
+         * some steel. A token can be handed over in a Discord message.
+         *
+         * Scoped to a system rather than to a construction site, because a
+         * colony is not one site. One of this board's own systems has eight --
+         * the colonisation ship, then orbital and planetary sites added over
+         * the following year -- all built by the same people. Per-site tokens
+         * would mean eight invitations for one colony, and not one of them
+         * could cover a site that does not exist yet, which is most of them.
          *
          * Hashed like an account key: what is stored cannot be used, so a
-         * database that leaks does not hand out the builds with it.
+         * database that leaks does not hand out the colonies with it.
          */
         "CREATE TABLE IF NOT EXISTS fc_colony_tokens (
             id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-            market_id BIGINT UNSIGNED NOT NULL,
+            system VARCHAR(128) NOT NULL,
+            -- The site it was minted from, for the label on it. The scope is
+            -- the system above; this is only provenance.
+            market_id BIGINT UNSIGNED NULL,
             token_hash CHAR(64) NOT NULL,
             label VARCHAR(64) NULL,
             created_by VARCHAR(24) NOT NULL,
@@ -882,7 +910,7 @@ function fc_schema_statements(): array
             last_used_at DATETIME NULL,
             revoked_at DATETIME NULL,
             UNIQUE KEY fc_colony_tokens_hash (token_hash),
-            KEY fc_colony_tokens_site (market_id)
+            KEY fc_colony_tokens_system (system)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
     ];
 }

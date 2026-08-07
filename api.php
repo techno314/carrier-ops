@@ -344,13 +344,16 @@ case 'colony_report':
         fc_json(400, ['error' => 'Send a JSON object describing what you can see.']);
     }
 
-    // A build token may only speak about its own build. An account key may
-    // report to any of them, which is what the planner uses when the person
-    // running it happens to have a login here.
-    if ($caller['market_id'] !== null
-        && (int) ($data['marketId'] ?? 0) !== $caller['market_id']
-    ) {
-        fc_json(403, ['error' => 'That token is for a different construction site.']);
+    // A token may only speak about sites in its own system. Checked against the
+    // stored site where there is one; for a site nobody has reported yet, the
+    // system in the report itself is all there is to go on, so it has to match
+    // -- otherwise a token could invent a build anywhere.
+    if ($caller['system'] !== null) {
+        $site = fc_colony_site((int) ($data['marketId'] ?? 0));
+        $system = $site['system'] ?? ($data['system'] ?? null);
+        if (!is_string($system) || strcasecmp($system, $caller['system']) !== 0) {
+            fc_json(403, ['error' => 'That token is for ' . $caller['system'] . '.']);
+        }
     }
 
     $result = fc_colony_apply_report($caller['hauler'], $data);
@@ -369,16 +372,23 @@ case 'colony_report':
 case 'colony':
     $caller = fc_api_colony_caller();
     $query = trim((string) ($_GET['site'] ?? $_GET['id'] ?? ''));
-    // A token knows which build it is for, so it needs no argument -- and
-    // giving it one that points somewhere else must not work.
-    if ($caller['market_id'] !== null) {
-        $query = (string) $caller['market_id'];
-    }
-    if ($query === '') {
-        fc_json(400, ['error' => 'Pass site= with a construction site name, or id= with its MarketID.']);
-    }
 
-    $matches = fc_colony_search($query);
+    if ($caller['system'] !== null) {
+        // A token sees its own system and no further. With no argument it gets
+        // every build there, which is the useful answer when a colony has eight
+        // of them; with one, the search is narrowed but never widened.
+        $matches = fc_colony_sites_in($caller['system']);
+        if ($query !== '') {
+            $matches = array_values(array_filter($matches, static fn(array $s) =>
+                (string) $s['market_id'] === $query
+                || stripos((string) $s['name'], $query) !== false));
+        }
+    } else {
+        if ($query === '') {
+            fc_json(400, ['error' => 'Pass site= with a construction site name, or id= with its MarketID.']);
+        }
+        $matches = fc_colony_search($query);
+    }
     if ($matches === []) {
         fc_json(404, ['error' => 'No build by that name yet. It appears once somebody docked there reports it.']);
     }
@@ -404,28 +414,32 @@ case 'colony_invite':
         fc_json(405, ['error' => 'POST to this one.']);
     }
 
-    $marketId = $caller['market_id'] ?? (int) ($_POST['marketId'] ?? ($_GET['marketId'] ?? 0));
-    if ($marketId <= 0) {
-        fc_json(400, ['error' => 'Pass marketId= for the build you are inviting somebody to.']);
+    $marketId = (int) ($_POST['marketId'] ?? ($_GET['marketId'] ?? 0));
+    $site = $marketId > 0 ? fc_colony_site($marketId) : null;
+    $system = $caller['system'] ?? ($site['system'] ?? null);
+
+    if ($system === null || $system === '') {
+        fc_json(400, [
+            'error' => 'Pass marketId= for a build in the system you are inviting somebody to.',
+        ]);
     }
-    if (fc_colony_site($marketId) === null) {
-        fc_json(404, ['error' => 'No such build. Report it once before inviting anyone to it.']);
-    }
-    // Only somebody already hauling to a build may invite others to it. That is
-    // the whole membership rule: there is no owner, because a colonisation crew
-    // does not have one, and anybody who has done a run has as much standing as
-    // whoever started it.
-    if (!fc_colony_participates($marketId, $caller['hauler'])) {
-        fc_json(403, ['error' => 'Report to this build once before inviting anybody to it.']);
+    // Only somebody already hauling in a system may invite others to it. That
+    // is the whole membership rule: there is no owner, because a colonisation
+    // crew does not have one, and anybody who has done a run has as much
+    // standing as whoever started it.
+    if (!fc_colony_participates($system, $caller['hauler'])) {
+        fc_json(403, ['error' => 'Do a run in ' . $system . ' before inviting anybody to it.']);
     }
 
-    $minted = fc_colony_mint_token($marketId, $caller['hauler'], $_GET['label'] ?? null);
+    $minted = fc_colony_mint_token($system, $marketId ?: null, $caller['hauler'], $_GET['label'] ?? null);
     fc_json(200, [
         'token' => $minted['token'],
-        'marketId' => (string) $marketId,
+        'system' => $system,
+        'sites' => count(fc_colony_sites_in($system)),
         // Said plainly, because it is the one thing about this that surprises
         // people: there is no way to look it up again.
-        'note' => 'Only the hash is stored. Copy it now — it cannot be shown again.',
+        'note' => 'Covers every build in that system, including ones not started yet. '
+            . 'Only the hash is stored, so copy it now — it cannot be shown again.',
     ]);
 
 case 'carriers':
