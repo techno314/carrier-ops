@@ -126,6 +126,132 @@ function fc_colony_sites_in(string $system): array
     );
 }
 
+/**
+ * How often a planner should do things, decided here rather than in each copy.
+ *
+ * These used to be constants compiled into the client, which meant changing one
+ * required everybody on the build to download a new planner -- and a crew is
+ * exactly the population that will not. So the board says, and the planners
+ * follow: it is the one machine all of them already talk to.
+ *
+ * Bounded on the way in and on the way out. A setting that arrives as nonsense
+ * must not be able to make every client hammer the board or stop reporting.
+ *
+ * @return array<string,int>
+ */
+function fc_colony_settings(): array
+{
+    static $bounds = [
+        // Two seconds keeps a crew standing at the same market in step; below
+        // that the reports cost more than the freshness is worth.
+        'reportSeconds' => [2, 1, 300],
+        // The journal is on local disk and cheap, but a rescan is still tens of
+        // milliseconds and there is nothing to see between game writes.
+        'journalSeconds' => [2, 1, 60],
+        // Frontier's own cache is 10-15 minutes wide, so asking faster than
+        // this returns the same bytes and spends somebody else's rate limit.
+        'carrierSeconds' => [120, 30, 3600],
+        // How long after a report somebody still counts as hauling. Several
+        // report intervals, so one slow request does not blink them out.
+        'presentSeconds' => [60, 10, 3600],
+    ];
+
+    $stored = [];
+    foreach (fc_all("SELECT k, v FROM fc_meta WHERE k LIKE 'colony_%'") as $row) {
+        $stored[$row['k']] = $row['v'];
+    }
+
+    $out = [];
+    foreach ($bounds as $name => [$default, $min, $max]) {
+        $value = $stored['colony_' . $name] ?? null;
+        $value = is_numeric($value) ? (int) $value : $default;
+        $out[$name] = max($min, min($max, $value));
+    }
+    return $out;
+}
+
+/** @return array{ok:bool,note:?string} */
+function fc_colony_set_settings(array $values): array
+{
+    $allowed = array_keys(fc_colony_settings());
+    $written = 0;
+    foreach ($values as $name => $value) {
+        if (!in_array($name, $allowed, true) || !is_numeric($value)) {
+            continue;
+        }
+        fc_exec(
+            "INSERT INTO fc_meta (k, v) VALUES (:k, :v) ON DUPLICATE KEY UPDATE v = VALUES(v)",
+            ['k' => 'colony_' . $name, 'v' => (string) (int) $value],
+        );
+        $written++;
+    }
+    return ['ok' => $written > 0, 'note' => $written === 0 ? 'Nothing recognised to save.' : null];
+}
+
+/**
+ * Everything about one system: its builds, its crew, its invitations.
+ *
+ * A system is the unit people mean when they say "the build" -- it is what a
+ * token grants, and what the admin panel manages.
+ */
+function fc_colony_room(string $system): array
+{
+    $sites = fc_colony_sites_in($system);
+    $ids = array_column($sites, 'market_id');
+
+    $haulers = $ids === [] ? [] : fc_all(
+        'SELECT h.*, s.name AS site_name
+           FROM fc_colony_haulers h
+           JOIN fc_colony_sites s ON s.market_id = h.market_id
+          WHERE s.system = :sys
+          ORDER BY h.updated_at DESC',
+        ['sys' => $system],
+    );
+
+    $tokens = fc_all(
+        'SELECT * FROM fc_colony_tokens WHERE system = :sys ORDER BY id DESC',
+        ['sys' => $system],
+    );
+
+    return ['system' => $system, 'sites' => $sites, 'haulers' => $haulers, 'tokens' => $tokens];
+}
+
+/** Every system anybody is building in. @return string[] */
+function fc_colony_rooms(): array
+{
+    return array_column(
+        fc_all('SELECT system FROM fc_colony_sites
+                 WHERE system IS NOT NULL AND system <> ""
+                 GROUP BY system ORDER BY MAX(read_at) DESC'),
+        'system',
+    );
+}
+
+/**
+ * Erase a system's build entirely: sites, manifests, crew, and invitations.
+ *
+ * Unlike a carrier, most of this comes back on its own -- every planner still
+ * running reports its whole position within a couple of seconds, and the
+ * manifest returns when somebody docks. What does not come back is the tokens,
+ * which is the point of offering this at all.
+ *
+ * @return array<string,int>
+ */
+function fc_colony_delete_room(string $system): array
+{
+    $ids = array_column(fc_colony_sites_in($system), 'market_id');
+    $removed = ['tokens' => fc_exec('DELETE FROM fc_colony_tokens WHERE system = :sys', ['sys' => $system])];
+
+    foreach (['fc_colony_stock', 'fc_colony_haulers', 'fc_colony_needs'] as $table) {
+        $removed[$table] = 0;
+        foreach ($ids as $id) {
+            $removed[$table] += fc_exec("DELETE FROM {$table} WHERE market_id = :m", ['m' => $id]);
+        }
+    }
+    $removed['sites'] = fc_exec('DELETE FROM fc_colony_sites WHERE system = :sys', ['sys' => $system]);
+    return $removed;
+}
+
 /** A build by its MarketID. */
 function fc_colony_site(int $marketId): ?array
 {
@@ -405,6 +531,10 @@ function fc_colony_view(array $site): array
     }
 
     return [
+        // Sent with the view rather than fetched separately: a planner asks for
+        // this every couple of seconds anyway, so a change made in the admin
+        // panel reaches every crew member on their next report.
+        'settings' => fc_colony_settings(),
         'site' => [
             'marketId' => (string) $marketId,
             'name' => $site['name'],

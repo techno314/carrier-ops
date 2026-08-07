@@ -20,6 +20,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === realpath(__FILE__)) {
 
 require_once __DIR__ . '/render.php';   // fc_carrier_link, fc_carrier_display_name
 require_once __DIR__ . '/spool.php';
+require_once __DIR__ . '/colony.php';
 
 /**
  * Apply an admin action.
@@ -75,6 +76,70 @@ function fc_handle_admin_post(string $action, array $admin): void
             ? 'Maintenance mode is off. The board is open.'
             : 'Could not remove the maintenance file. Delete .htmaintenance on the server.',
             fc_maintenance() === null ? 'ok' : 'err');
+        return;
+    }
+
+    // How often every planner talks to the board. Kept here rather than in the
+    // clients because a colonisation crew is exactly the population that will
+    // not download a new planner to change a number.
+    if ($action === 'admin_colony_settings') {
+        $result = fc_colony_set_settings([
+            'reportSeconds' => $_POST['reportSeconds'] ?? null,
+            'journalSeconds' => $_POST['journalSeconds'] ?? null,
+            'carrierSeconds' => $_POST['carrierSeconds'] ?? null,
+            'presentSeconds' => $_POST['presentSeconds'] ?? null,
+        ]);
+        $now = fc_colony_settings();
+        fc_flash($result['ok']
+            ? 'Saved. Every planner picks these up on its next report — reporting every '
+                . $now['reportSeconds'] . 's.'
+            : ($result['note'] ?? 'Nothing saved.'),
+            $result['ok'] ? 'ok' : 'err');
+        return;
+    }
+
+    if ($action === 'admin_colony_revoke') {
+        $id = (int) ($_POST['token_id'] ?? 0);
+        $token = $id === 0 ? null : fc_one('SELECT * FROM fc_colony_tokens WHERE id = :id', ['id' => $id]);
+        if ($token === null) {
+            fc_flash('No such invitation.', 'err');
+            return;
+        }
+        fc_exec('UPDATE fc_colony_tokens SET revoked_at = UTC_TIMESTAMP() WHERE id = :id', ['id' => $id]);
+        // Revoked rather than deleted: whoever was using it stops reporting,
+        // and the row stays as a record that it existed and when it died.
+        fc_flash('Invitation ' . ($token['label'] ?: 't' . $id) . ' to '
+            . $token['system'] . ' will not work again.');
+        return;
+    }
+
+    if ($action === 'admin_colony_revoke_all') {
+        $system = trim((string) ($_POST['system'] ?? ''));
+        $n = fc_exec(
+            'UPDATE fc_colony_tokens SET revoked_at = UTC_TIMESTAMP()
+              WHERE system = :sys AND revoked_at IS NULL',
+            ['sys' => $system],
+        );
+        fc_flash($n === 0
+            ? 'There were no live invitations to ' . $system . '.'
+            : $n . ' invitation' . ($n === 1 ? '' : 's') . ' to ' . $system . ' revoked. '
+                . 'Anybody using one stops reporting; account keys are unaffected.');
+        return;
+    }
+
+    if ($action === 'admin_colony_delete') {
+        $system = trim((string) ($_POST['system'] ?? ''));
+        if ($system === '' || fc_colony_sites_in($system) === []) {
+            fc_flash('No build in that system.', 'err');
+            return;
+        }
+        $removed = fc_colony_delete_room($system);
+        fc_flash(
+            $system . ' cleared: ' . $removed['sites'] . ' site'
+            . ($removed['sites'] === 1 ? '' : 's') . ', ' . $removed['tokens'] . ' invitation'
+            . ($removed['tokens'] === 1 ? '' : 's') . '. Anyone still running a planner will '
+            . 'report themselves back within seconds; the invitations will not come back.'
+        );
         return;
     }
 
@@ -626,6 +691,155 @@ function fc_render_admin(array $admin): void
           The carrier itself comes back at the next sync if anything is still connected to report it, which
           is what makes this a way to start a carrier's records over rather than a way to remove one.
         </p>
+      </div>
+
+      <?php
+      $settings = fc_colony_settings();
+      $rooms = fc_colony_rooms();
+      ?>
+      <div class="card">
+        <h2>Colonisation</h2>
+        <p class="muted small">
+          A build is a whole star system, not one construction site — a colony grows several, and an
+          invitation covers all of them including the ones nobody has started yet. Anybody already
+          hauling in a system can invite others to it; there is no owner, because a colonisation crew
+          does not have one.
+        </p>
+
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+          <div class="stats" style="margin-bottom:12px">
+            <?php foreach ([
+                'reportSeconds' => ['Report every', 'How often each planner sends its position and reads back everyone else\'s.'],
+                'journalSeconds' => ['Read journals every', 'How often a planner rescans the game\'s journal on its own disk.'],
+                'carrierSeconds' => ['Carrier every', 'How often a planner asks this board for a carrier\'s hold. Frontier\'s own cache is 10–15 minutes wide.'],
+                'presentSeconds' => ['Counted as hauling for', 'How long after a report somebody still shows as present in the crew list.'],
+            ] as $key => [$label, $hint]): ?>
+              <div class="stat" title="<?= fc_e($hint) ?>">
+                <div class="k"><?= fc_e($label) ?></div>
+                <div class="v">
+                  <input name="<?= fc_e($key) ?>" type="number" min="1" max="3600"
+                         value="<?= (int) $settings[$key] ?>" style="width:5em">
+                  <span class="small dim">s</span>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+          <div class="actions">
+            <button class="btn" type="submit" name="action" value="admin_colony_settings">Save intervals</button>
+          </div>
+        </form>
+
+        <p class="small dim">
+          These live on the board rather than in each planner, so a change reaches every crew member
+          on their next report instead of requiring all of them to download a new copy. Values outside
+          the sensible range are clamped rather than refused.
+        </p>
+
+        <?php if ($rooms === []): ?>
+          <div class="empty">No colonisation builds yet. One appears when somebody's planner reports a construction site.</div>
+        <?php else: ?>
+          <?php foreach ($rooms as $system): $room = fc_colony_room($system); ?>
+            <div class="banner" style="margin-top:14px">
+              <strong><?= fc_e($system) ?></strong>
+              <span class="small muted">
+                · <?= count($room['sites']) ?> site<?= count($room['sites']) === 1 ? '' : 's' ?>
+                · <?= count($room['haulers']) ?> hauler<?= count($room['haulers']) === 1 ? '' : 's' ?>
+              </span>
+
+              <div class="tablewrap" style="margin-top:10px">
+                <table>
+                  <thead><tr><th>Site</th><th class="num">Built</th><th>Last read</th></tr></thead>
+                  <tbody>
+                  <?php foreach ($room['sites'] as $site): ?>
+                    <tr>
+                      <td><?= fc_e($site['name']) ?></td>
+                      <td class="num"><?= number_format(((float) $site['progress']) * 100, 1) ?>%</td>
+                      <td class="small muted nowrap"><?= fc_e(fc_ago($site['read_at'])) ?></td>
+                    </tr>
+                  <?php endforeach; ?>
+                  </tbody>
+                </table>
+              </div>
+
+              <?php if ($room['haulers'] !== []): ?>
+                <div class="tablewrap" style="margin-top:10px">
+                  <table>
+                    <thead><tr><th>Hauler</th><th>Carrier</th><th>Ship</th><th class="num">Hold</th><th>Last reported</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($room['haulers'] as $h): ?>
+                      <?php
+                      // Present is the same question the planners ask: recently
+                      // enough, rather than a connection that is up or down.
+                      $age = time() - (int) strtotime((string) $h['updated_at'] . ' UTC');
+                      $here = $age <= $settings['presentSeconds'];
+                      ?>
+                      <tr>
+                        <td>
+                          <?= $here ? '<span class="badge on">●</span>' : '<span class="badge off">○</span>' ?>
+                          <?= fc_e($h['cmdr'] ?: 'a hauler') ?>
+                          <span class="small dim"><?= fc_e($h['hauler']) ?></span>
+                        </td>
+                        <td class="small"><?= fc_e($h['carrier'] ?? '—') ?></td>
+                        <td class="small muted"><?= fc_e($h['ship'] ?? '—') ?></td>
+                        <td class="num"><?= $h['cargo_capacity'] === null ? '—' : fc_num((int) $h['cargo_capacity']) . ' t' ?></td>
+                        <td class="small muted nowrap"><?= fc_e(fc_ago($h['updated_at'])) ?></td>
+                      </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+              <?php endif; ?>
+
+              <?php $live = array_filter($room['tokens'], static fn(array $t) => $t['revoked_at'] === null); ?>
+              <div class="small muted" style="margin-top:10px">
+                <?= count($live) ?> live invitation<?= count($live) === 1 ? '' : 's' ?><?php
+                  if (count($room['tokens']) > count($live)) {
+                      echo ', ' . (count($room['tokens']) - count($live)) . ' revoked';
+                  } ?>
+              </div>
+              <?php if ($live !== []): ?>
+                <div class="tablewrap" style="margin-top:6px">
+                  <table>
+                    <thead><tr><th>Invitation</th><th>Minted</th><th>Last used</th><th></th></tr></thead>
+                    <tbody>
+                    <?php foreach ($live as $t): ?>
+                      <tr>
+                        <td><?= fc_e($t['label'] ?: 't' . $t['id']) ?>
+                          <span class="small dim">by <?= fc_e($t['created_by']) ?></span></td>
+                        <td class="small muted nowrap"><?= fc_e(fc_ago($t['created_at'])) ?></td>
+                        <td class="small muted nowrap"><?= $t['last_used_at'] === null
+                            ? '<span class="dim">never</span>' : fc_e(fc_ago($t['last_used_at'])) ?></td>
+                        <td class="right">
+                          <form method="post" class="inline">
+                            <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+                            <input type="hidden" name="token_id" value="<?= (int) $t['id'] ?>">
+                            <button class="btn danger ghost sm" name="action" value="admin_colony_revoke"
+                                    onclick="return confirm('Revoke this invitation? Whoever is using it stops reporting.')">Revoke</button>
+                          </form>
+                        </td>
+                      </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                  </table>
+                </div>
+              <?php endif; ?>
+
+              <form method="post" style="margin-top:10px">
+                <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+                <input type="hidden" name="system" value="<?= fc_e($system) ?>">
+                <div class="actions" style="margin-top:0">
+                  <?php if ($live !== []): ?>
+                    <button class="btn ghost sm" name="action" value="admin_colony_revoke_all"
+                            onclick="return confirm('Revoke every invitation to <?= fc_e($system) ?>? Account keys are unaffected.')">Revoke all invitations</button>
+                  <?php endif; ?>
+                  <button class="btn danger ghost sm" name="action" value="admin_colony_delete"
+                          onclick="return confirm('Clear <?= fc_e($system) ?>? Anyone still running a planner reports themselves back within seconds; the invitations will not come back.')">Clear build</button>
+                </div>
+              </form>
+            </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
       </div>
 
       <div class="card">
