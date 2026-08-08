@@ -169,6 +169,48 @@ p { line-height: 1.55; }
 .card h2 { display: flex; align-items: baseline; gap: 10px; }
 
 /*
+ * Collapsible cards.
+ *
+ * Settings, Upload and the Planner page had grown to the point where finding
+ * anything meant scrolling past everything. A <details> costs no JavaScript,
+ * keeps the heading readable when shut, and leaves the page a short list of
+ * what is on it.
+ *
+ * A closed card loses its padding below the heading, so a column of shut cards
+ * reads as a list rather than a column of mostly-empty boxes.
+ */
+details.card { padding-bottom: 20px; }
+details.card:not([open]) { padding-bottom: 14px; }
+details.card > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary h2 { margin: 0; flex: 1; }
+
+/* The twisty, drawn rather than inherited, so it matches in both states. */
+details.card > summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+  flex: none;
+  align-self: center;
+}
+details.card[open] > summary::after { transform: rotate(45deg); }
+details.card > summary:hover::after { border-color: var(--text); }
+details.card[open] > summary { margin-bottom: 14px; }
+
+/* Keyboard users get the same outline the buttons have. */
+details.card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/*
  * Anything following a grid needs the same 18px a card following a card gets.
  * `.card + .card` never matched the card after the fleet grid, so it sat
  * against it with no gap at all.

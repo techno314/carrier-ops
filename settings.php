@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib/core.php';
 require_once __DIR__ . '/lib/render.php';
 require_once __DIR__ . '/lib/capi_auth.php';
+require_once __DIR__ . '/lib/colony.php';
 
 $user = fc_require_user();
 $error = null;
@@ -138,8 +139,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         fc_exec('UPDATE fc_users SET api_key_hash = NULL WHERE id = :id', ['id' => $user['id']]);
         fc_flash('API key revoked.');
         fc_redirect(fc_url('settings.php'));
+
+    } elseif ($action === 'revoke_invite') {
+        // Scoped to this account's own invitations by the WHERE clause rather
+        // than by checking first and updating after: one statement cannot be
+        // raced, and an id belonging to somebody else simply matches nothing.
+        $id = (int) ($_POST['token_id'] ?? 0);
+        $done = fc_exec(
+            'UPDATE fc_colony_tokens SET revoked_at = UTC_TIMESTAMP()
+              WHERE id = :id AND created_by = :me AND revoked_at IS NULL',
+            ['id' => $id, 'me' => 'u' . $user['id']],
+        );
+        fc_flash($done > 0
+            ? 'Invitation revoked. Whoever was using it stops reporting; nothing they already contributed is removed.'
+            : 'That invitation is not yours, or was already revoked.',
+            $done > 0 ? 'ok' : 'err');
+        fc_redirect(fc_url('settings.php'));
+
+    } elseif ($action === 'revoke_invites_all') {
+        $done = fc_exec(
+            'UPDATE fc_colony_tokens SET revoked_at = UTC_TIMESTAMP()
+              WHERE created_by = :me AND revoked_at IS NULL',
+            ['me' => 'u' . $user['id']],
+        );
+        fc_flash($done === 0
+            ? 'You had no live invitations.'
+            : $done . ' invitation' . ($done === 1 ? '' : 's') . ' revoked.');
+        fc_redirect(fc_url('settings.php'));
     }
 }
+
+// Invitations this account has handed out. Revoked ones are kept and shown, so
+// that "did I already turn that off?" has an answer.
+$invites = fc_all(
+    'SELECT t.*, s.name AS site_name
+       FROM fc_colony_tokens t
+       LEFT JOIN fc_colony_sites s ON s.market_id = t.market_id
+      WHERE t.created_by = :me
+      ORDER BY t.revoked_at IS NOT NULL, t.id DESC',
+    ['me' => 'u' . $user['id']],
+);
 
 $carriers = fc_all('SELECT * FROM fc_carriers WHERE owner_user_id = :uid ORDER BY updated_at DESC', ['uid' => $user['id']]);
 
@@ -153,8 +192,8 @@ fc_head('Settings', 'settings');
     <div class="banner err"><?= fc_e($error) ?></div>
   <?php endif; ?>
 
-  <div class="card">
-    <h2>Profile</h2>
+  <details class="card" open>
+    <summary><h2>Profile</h2></summary>
     <form method="post">
       <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
       <input type="hidden" name="action" value="profile">
@@ -174,12 +213,12 @@ fc_head('Settings', 'settings');
 
       <div class="actions"><button class="btn" type="submit">Save</button></div>
     </form>
-  </div>
+  </details>
 
   <?php $capiLinks = fc_capi_links((int) $user['id']);
         $capiStale = count(array_filter($capiLinks, static fn(array $l) => (int) $l['needs_reauth'] === 1)); ?>
-  <div class="card">
-    <h2>Frontier account
+  <details class="card">
+    <summary><h2>Frontier account
       <?php if (!fc_capi_configured()): ?>
         <span class="badge off">Unavailable</span>
       <?php elseif ($capiLinks === []): ?>
@@ -189,7 +228,7 @@ fc_head('Settings', 'settings');
       <?php else: ?>
         <span class="badge on"><?= count($capiLinks) ?> connected</span>
       <?php endif; ?>
-    </h2>
+    </h2></summary>
     <p class="muted small">
       Connecting to Frontier lets the board read your carrier directly, including the cargo hold and the real
       upkeep figures, without the game or EDMC running. Elite allows one carrier per Frontier account, so
@@ -204,7 +243,7 @@ fc_head('Settings', 'settings');
     <?php else: ?>
       <p class="small dim" style="margin-bottom:0">No Frontier client id is configured on this deployment.</p>
     <?php endif; ?>
-  </div>
+  </details>
 
   <?php
   $squadrons = fc_all(
@@ -213,8 +252,8 @@ fc_head('Settings', 'settings');
   );
   ?>
   <?php if ($squadrons !== []): ?>
-    <div class="card">
-      <h2>Squadrons</h2>
+    <details class="card">
+      <summary><h2>Squadrons</h2></summary>
       <p class="muted small">
         Read from Frontier alongside your carrier. A squadron carrier belongs to the squadron rather than to
         anyone in it, so it shows on your dashboard for as long as you are a member — no claiming involved.
@@ -305,11 +344,11 @@ fc_head('Settings', 'settings');
           </tbody>
         </table>
       </div>
-    </div>
+    </details>
   <?php endif; ?>
 
-  <div class="card">
-    <h2>API key</h2>
+  <details class="card">
+    <summary><h2>API key</h2></summary>
     <?php if ($freshKey !== null): ?>
       <div class="banner">
         Here is your key. It is not shown again — store it now.
@@ -356,10 +395,79 @@ fc_head('Settings', 'settings');
         <?php endif; ?>
       </div>
     </form>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Your carriers</h2>
+  <?php $liveInvites = array_filter($invites, static fn(array $t) => $t['revoked_at'] === null); ?>
+  <details class="card"<?= $liveInvites === [] ? '' : ' open' ?>>
+    <summary><h2>Build invitations<?= $liveInvites === [] ? '' : ' <span class="badge">' . count($liveInvites) . ' live</span>' ?></h2></summary>
+
+    <p class="muted small">
+      Invitations you have handed out from the <a href="<?= fc_e(fc_url('planner.php')) ?>">Colony Planner</a>.
+      Each one lets somebody take part in one star system's build without an account here — nothing else on this
+      board — and it works until you revoke it.
+    </p>
+
+    <?php if ($invites === []): ?>
+      <div class="empty">You have not created any.</div>
+    <?php else: ?>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Invitation</th><th>Build</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+          <tbody>
+          <?php foreach ($invites as $t): $dead = $t['revoked_at'] !== null; ?>
+            <tr<?= $dead ? ' class="dim"' : '' ?>>
+              <td><?= fc_e($t['label'] ?: 'unlabelled') ?></td>
+              <td class="small"><?= fc_e($t['site_name'] ?? $t['system']) ?>
+                <?php if ($t['site_name'] !== null): ?>
+                  <div class="small dim"><?= fc_e($t['system']) ?></div>
+                <?php endif; ?></td>
+              <td class="small muted nowrap"><?= fc_e(fc_ago($t['created_at'])) ?></td>
+              <td class="small muted nowrap">
+                <?php if ($dead): ?>
+                  <span class="badge off">revoked</span>
+                <?php elseif ($t['last_used_at'] === null): ?>
+                  <span class="dim">never</span>
+                <?php else: ?>
+                  <?= fc_e(fc_ago($t['last_used_at'])) ?>
+                <?php endif; ?>
+              </td>
+              <td class="right">
+                <?php if (!$dead): ?>
+                  <form method="post" class="inline">
+                    <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+                    <input type="hidden" name="token_id" value="<?= (int) $t['id'] ?>">
+                    <button class="btn danger ghost sm" name="action" value="revoke_invite"
+                            onclick="return confirm('Revoke this invitation? Whoever is using it stops reporting.')">Revoke</button>
+                  </form>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+
+      <?php if ($liveInvites !== []): ?>
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
+          <div class="actions">
+            <button class="btn ghost sm" name="action" value="revoke_invites_all"
+                    onclick="return confirm('Revoke every invitation you have created?')">Revoke all</button>
+          </div>
+        </form>
+      <?php endif; ?>
+    <?php endif; ?>
+
+    <?php if ($invites !== []): ?>
+      <p class="small dim" style="margin-bottom:0">
+        Revoking stops somebody reporting from that moment. What they already contributed stays on the build —
+        it is theirs, and removing it would leave the crew's totals wrong.
+      </p>
+    <?php endif; ?>
+  </details>
+
+  <details class="card">
+    <summary><h2>Your carriers</h2></summary>
     <?php if ($carriers === []): ?>
       <div class="empty">None claimed yet. <a href="<?= fc_e(fc_url('upload.php')) ?>">Upload a journal</a> to claim one.</div>
     <?php else: ?>
@@ -382,11 +490,11 @@ fc_head('Settings', 'settings');
         </table>
       </div>
     <?php endif; ?>
-  </div>
+  </details>
 
   <?php if ((int) $user['is_admin'] !== 1 && fc_admin_code() !== null): ?>
-    <div class="card">
-      <h2>Admin</h2>
+    <details class="card">
+      <summary><h2>Admin</h2></summary>
       <p class="muted small">
         The code is in <code>.htadmin-code</code> in the app directory on the server. Admins can view and take over
         any carrier on the board, so it is deliberately not something you can claim just by signing up.
@@ -400,10 +508,10 @@ fc_head('Settings', 'settings');
         </div>
         <div class="actions"><button class="btn ghost" type="submit">Become an admin</button></div>
       </form>
-    </div>
+    </details>
   <?php elseif ((int) $user['is_admin'] === 1): ?>
-    <div class="card">
-      <h2>Admin</h2>
+    <details class="card">
+      <summary><h2>Admin</h2></summary>
       <p class="muted small">
         This account is an admin. It can see and manage every carrier on the board, suspend accounts,
         and hand the role to somebody else.
@@ -411,11 +519,11 @@ fc_head('Settings', 'settings');
       <div class="actions">
         <a class="btn" href="<?= fc_e(fc_url('admin.php')) ?>">Open the admin panel</a>
       </div>
-    </div>
+    </details>
   <?php endif; ?>
 
-  <div class="card">
-    <h2>Password</h2>
+  <details class="card">
+    <summary><h2>Password</h2></summary>
     <form method="post">
       <input type="hidden" name="csrf" value="<?= fc_e(fc_csrf()) ?>">
       <input type="hidden" name="action" value="password">
@@ -435,10 +543,10 @@ fc_head('Settings', 'settings');
 
       <div class="actions"><button class="btn" type="submit">Change password</button></div>
     </form>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Delete your account</h2>
+  <details class="card">
+    <summary><h2>Delete your account</h2></summary>
 
     <?php if ($user['delete_after'] !== null): ?>
       <div class="banner warn">
@@ -478,6 +586,6 @@ fc_head('Settings', 'settings');
         </div>
       </form>
     <?php endif; ?>
-  </div>
+  </details>
 </main>
 <?php fc_foot();

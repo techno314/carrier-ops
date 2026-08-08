@@ -34,8 +34,8 @@ fc_head('Colony Planner', 'planner');
     A small desktop program that reads your Elite journal — it is not part of this board, it talks to it.
   </p>
 
-  <div class="card">
-    <h2>Download</h2>
+  <details class="card" open>
+    <summary><h2>Download</h2></summary>
     <div class="actions" style="margin-top:0">
       <a class="btn" href="<?= fc_e($href) ?>" download="colony-planner.zip">
         colony-planner.zip<?= $size === false ? '' : ' · ' . number_format($size / 1024, 1) . ' KB' ?>
@@ -46,10 +46,10 @@ fc_head('Colony Planner', 'planner');
       distributions package separately — the program says which package if it is missing.
       It updates itself after this, so this is the only download.
     </p>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>The problem it solves</h2>
+  <details class="card">
+    <summary><h2>The problem it solves</h2></summary>
     <p class="muted small">
       The construction panel is readable in exactly one place: docked at the site. That is the one place the
       answer has stopped being useful, because by then you have chosen a load, flown out, and filled the hold
@@ -60,10 +60,10 @@ fc_head('Colony Planner', 'planner');
       commodity, how much is wanted, how much has arrived. The planner reads that and shows what is left,
       minus whatever is already in your hold or on your carrier.
     </p>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Hauling with other people</h2>
+  <details class="card">
+    <summary><h2>Hauling with other people</h2></summary>
     <p class="muted small">
       A commander's journal is a private account of one person's evening. It knows what the depot said when
       they last docked and nothing at all about the four other people flying to the same site — so two of them
@@ -79,10 +79,10 @@ fc_head('Colony Planner', 'planner');
       Invitations are per system and need no account here: whoever is hauling presses <strong>Invite…</strong>
       and pastes the token to the next person. It works on that colony and nothing else on this board.
     </p>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Setting it up</h2>
+  <details class="card">
+    <summary><h2>Setting it up</h2></summary>
     <ol class="muted" style="line-height:1.8">
       <li>Extract the zip anywhere and run <code>Colony Planner.bat</code>, or <code>colony-planner.sh</code> on Linux.</li>
       <li>Dock at a construction site once. The game writes the manifest and the site appears.</li>
@@ -101,20 +101,15 @@ fc_head('Colony Planner', 'planner');
       A key is only needed for the carrier hold and for sharing. Everything about the site itself comes from
       your own journal and works without one.
     </p>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Updating</h2>
+  <details class="card">
+    <summary><h2>Updating</h2></summary>
     <p class="muted small">
       It checks this board on startup and every half hour after. When a newer version is here, a button appears
       beside <em>Follow the journal</em>; pressing it downloads the new planner, writes it over the old one and
       restarts. Nothing else is required, and nothing is shown while you are current.
     </p>
-    <p class="small dim" style="margin-bottom:0">
-      The check is <code><?= fc_e(fc_url('api.php?action=planner')) ?></code> and needs no key. The
-      planner works entirely from your own journal without one — a key is only for the carrier hold and
-      for sharing a build — so requiring it here would mean solo users never hearing about a new version.
-    </p>
-  </div>
+  </details>
 </main>
 <?php fc_foot();

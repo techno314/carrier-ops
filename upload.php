@@ -123,8 +123,8 @@ fc_head('Upload', 'upload');
     </form>
   </div>
 
-  <div class="card">
-    <h2>Which files to pick</h2>
+  <details class="card">
+    <summary><h2>Which files to pick</h2></summary>
     <div class="tablewrap">
       <table>
         <tbody>
@@ -139,10 +139,10 @@ fc_head('Upload', 'upload');
       Uploading the same file twice is harmless — events are matched on their own timestamps, and older data
       never overwrites newer.
     </p>
-  </div>
+  </details>
 
-  <div class="card">
-    <h2>Stop doing this by hand</h2>
+  <details class="card">
+    <summary><h2>Stop doing this by hand</h2></summary>
     <p class="muted small">
       The <a href="<?= fc_e(fc_url('plugin.php')) ?>">EDMC plugin</a> watches your journal and pushes carrier events
       as they happen, including a one-press backfill of everything already on disk. Failing that, an API key on your
@@ -151,11 +151,11 @@ fc_head('Upload', 'upload');
     <div class="actions">
       <a class="btn ghost sm" href="<?= fc_e(fc_url('plugin.php')) ?>">Get the plugin</a>
     </div>
-  </div>
+  </details>
 
   <?php if ($recent !== []): ?>
-    <div class="card">
-      <h2>Recent uploads</h2>
+    <details class="card">
+      <summary><h2>Recent uploads</h2></summary>
       <div class="tablewrap">
         <table>
           <thead><tr><th>When</th><th>File</th><th>Source</th><th class="num">Events</th><th class="num">Applied</th></tr></thead>
@@ -172,7 +172,7 @@ fc_head('Upload', 'upload');
           </tbody>
         </table>
       </div>
-    </div>
+    </details>
   <?php endif; ?>
 </main>
 
